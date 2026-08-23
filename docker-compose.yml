@@ -1,0 +1,17 @@
+services:
+  liba-agents:
+    build: .
+    container_name: liba-agents
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      LIBA_OS_BASE_URL: ${LIBA_OS_BASE_URL:-}
+      LIBA_OS_API_KEY: ${LIBA_OS_API_KEY:-}
+      SOCIAL_PUBLISH_ENABLED: ${SOCIAL_PUBLISH_ENABLED:-0}
+      SOCIAL_DRY_RUN: ${SOCIAL_DRY_RUN:-1}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      META_PAGE_ID: ${META_PAGE_ID:-}
+      META_PAGE_ACCESS_TOKEN: ${META_PAGE_ACCESS_TOKEN:-}
+      META_IG_USER_ID: ${META_IG_USER_ID:-}
+      META_GRAPH_VERSION: ${META_GRAPH_VERSION:-v21.0}

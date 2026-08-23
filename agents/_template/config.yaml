@@ -1,0 +1,18 @@
+agent:
+  name: _template
+  description: Copy this folder, then create a Hermes profile with the same name.
+
+model:
+  name: gpt-5.4-mini
+  provider: openai-api
+
+source:
+  type: local
+
+os:
+  mode: mock
+
+stt:
+  provider: null
+  language: he
+  diarization: true

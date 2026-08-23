@@ -1,0 +1,21 @@
+agent:
+  name: social-media
+  # Liba OS agents.slug. Hermes profile is also social-media.
+  os_slug: social-media
+  description: Publish approved Liba calendar posts to Facebook page and Instagram.
+
+model:
+  name: gpt-5.4-mini
+  provider: openai-api
+
+os:
+  # mock = JSON files. http = POST LIBA_OS_BASE_URL/api/mcp (Bearer LIBA_OS_API_KEY)
+  mode: http
+  mock_dir: ../../mock_os_data
+  base_url: http://localhost:3000
+
+meta:
+  # Tokens in Hermes profile .env — never in git.
+  # META_PAGE_ID, META_PAGE_ACCESS_TOKEN, META_IG_USER_ID
+  # Without tokens the worker dry-runs and still marks OS published with dry-run ids.
+  graph_version: v21.0

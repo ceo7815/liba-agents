@@ -1,0 +1,31 @@
+agent:
+  name: call-qa
+  # Liba OS agents.slug (seeded as call-control). Hermes profile stays call-qa.
+  os_slug: call-control
+  description: Analyze insurance sales/service call recordings and produce QA scores.
+
+model:
+  name: gpt-5.4-mini
+  provider: openai-api
+
+source:
+  # local = inbox/  |  drive = shared folder  |  voice_center = later
+  type: drive
+  local_dir: ../../inbox
+  drive:
+    folder_id: 1PQYaDHFbJDqBWnBn0B4cbnVYPOdCo9Fg
+    folder_url: https://drive.google.com/drive/folders/1PQYaDHFbJDqBWnBn0B4cbnVYPOdCo9Fg
+    cache_dir: ../../inbox/drive-cache
+
+os:
+  # mock = JSON files. http = POST LIBA_OS_BASE_URL/api/mcp (Bearer LIBA_OS_API_KEY)
+  mode: http
+  mock_dir: ../../mock_os_data
+  base_url: http://localhost:3000
+
+stt:
+  # openai = gpt-4o-transcribe (מילים מדויקות) + תיוג סוכן/לקוח בלי לשכתב
+  # openai-diarize = המודל הישן עם הפרדת דוברים מובנית (פחות מדויק בעברית)
+  provider: openai
+  language: auto
+  diarization: true
