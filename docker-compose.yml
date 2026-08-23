@@ -4,7 +4,9 @@ services:
     container_name: liba-agents
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      # Host 8082: 8080 is already taken on the Liba Insurance VPS
+      # (same leftover as liba-site). In xCloud pick 8082 as primary port.
+      - "8082:8080"
     environment:
       LIBA_OS_BASE_URL: ${LIBA_OS_BASE_URL:-}
       LIBA_OS_API_KEY: ${LIBA_OS_API_KEY:-}

@@ -16,7 +16,7 @@ Liba OS  ← יומן, אישורים, עלויות, תגובות. הסוכני�
 1. עצרו worker מקומי.
 2. ב-xCloud על שרת **Liba Insurance** (לא beo-systems-1): **+ New Site** → **Custom Docker** → **Docker Compose From Git**.
 3. GitHub `ceo7815/liba-agents`, branch `main`, compose `docker-compose.yml`.
-4. Port **8080**.
+4. Port **8082** (host). Container still listens on 8080; 8080 is already allocated on the VPS.
 5. Environment File לפי `.env.example`. עד חיבור Meta: `SOCIAL_PUBLISH_ENABLED=0` (רק heartbeat).
 6. Auto-deploy on push + HTTPS.
 7. `LIBA_OS_BASE_URL` = כתובת ציבורית של Liba OS, לא localhost.
