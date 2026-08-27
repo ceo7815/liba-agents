@@ -7,6 +7,7 @@ If tokens are missing, dry-run records fake ids so the OS calendar can be tested
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -222,8 +223,24 @@ def _instagram_publish(ig: str, asset: dict[str, Any], caption: str, *, stories:
     creation_id = created.get("id")
     if not creation_id:
         raise MetaError("IG creation id missing")
+    _wait_instagram_container(str(creation_id))
     published = _graph("POST", f"{ig}/media_publish", {"creation_id": creation_id})
     return str(published.get("id") or creation_id)
+
+
+def _wait_instagram_container(creation_id: str, *, timeout_sec: int = 90) -> None:
+    """Instagram containers are often not ready immediately; publish too early fails."""
+    deadline = time.time() + timeout_sec
+    last_status = ""
+    while time.time() < deadline:
+        body = _get(creation_id, {"fields": "status_code,status"})
+        last_status = str(body.get("status_code") or body.get("status") or "")
+        if last_status.upper() == "FINISHED":
+            return
+        if last_status.upper() in {"ERROR", "EXPIRED"}:
+            raise MetaError(f"IG container {creation_id} status={last_status}")
+        time.sleep(2)
+    raise MetaError(f"IG container {creation_id} not ready (last_status={last_status or 'unknown'})")
 
 
 def fetch_insights(meta_ids: dict[str, Any]) -> dict[str, int]:
