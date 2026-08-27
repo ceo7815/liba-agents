@@ -220,26 +220,52 @@ def _instagram_publish(ig: str, asset: dict[str, Any], caption: str, *, stories:
     if caption and not stories:
         fields["caption"] = caption
     created = _graph("POST", f"{ig}/media", fields)
-    creation_id = created.get("id")
+    creation_id = str(created.get("id") or "")
     if not creation_id:
         raise MetaError("IG creation id missing")
-    _wait_instagram_container(str(creation_id))
-    published = _graph("POST", f"{ig}/media_publish", {"creation_id": creation_id})
-    return str(published.get("id") or creation_id)
+    _wait_instagram_container(creation_id)
+    return _instagram_media_publish_with_retry(ig, creation_id)
 
 
-def _wait_instagram_container(creation_id: str, *, timeout_sec: int = 90) -> None:
+def _instagram_media_publish_with_retry(ig: str, creation_id: str, *, attempts: int = 8) -> str:
+    """Retry publish when Meta says the container is not ready yet (9007 / 2207027)."""
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            published = _graph("POST", f"{ig}/media_publish", {"creation_id": creation_id})
+            return str(published.get("id") or creation_id)
+        except MetaError as exc:
+            last_error = exc
+            text = str(exc)
+            not_ready = "9007" in text or "2207027" in text or "Media ID is not available" in text
+            if not not_ready or attempt >= attempts:
+                raise
+            time.sleep(min(5 * attempt, 20))
+            _wait_instagram_container(creation_id, timeout_sec=60)
+    raise MetaError(str(last_error) if last_error else "IG media_publish failed")
+
+
+def _wait_instagram_container(creation_id: str, *, timeout_sec: int = 180) -> None:
     """Instagram containers are often not ready immediately; publish too early fails."""
     deadline = time.time() + timeout_sec
     last_status = ""
     while time.time() < deadline:
-        body = _get(creation_id, {"fields": "status_code,status"})
-        last_status = str(body.get("status_code") or body.get("status") or "")
-        if last_status.upper() == "FINISHED":
+        try:
+            body = _get(creation_id, {"fields": "status_code"})
+        except MetaError as exc:
+            # Container lookup can lag right after create; keep waiting.
+            if "404" in str(exc) or "does not exist" in str(exc).lower():
+                time.sleep(2)
+                continue
+            raise
+        last_status = str(body.get("status_code") or "").upper()
+        if last_status == "FINISHED":
+            # Small grace period — Meta sometimes still rejects instantly after FINISHED.
+            time.sleep(2)
             return
-        if last_status.upper() in {"ERROR", "EXPIRED"}:
+        if last_status in {"ERROR", "EXPIRED"}:
             raise MetaError(f"IG container {creation_id} status={last_status}")
-        time.sleep(2)
+        time.sleep(3)
     raise MetaError(f"IG container {creation_id} not ready (last_status={last_status or 'unknown'})")
 
 
