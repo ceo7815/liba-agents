@@ -5,11 +5,13 @@ Procedure for the Hermes `social-media` worker. Liba OS already holds the approv
 ## Poll
 
 1. `social.poll_due` — OS claims one due `social_publish_queue` row, sets post `publishing`, returns caption, platforms, formats, signed asset URLs.
+   - Scheduled posts: `scheduled_for` in the past/now after approval.
+   - Immediate posts: OS sets `scheduled_for` to now (or past) and enqueues the same way. No separate Meta path.
 2. If `has_work` is false, heartbeat and wait.
 
 ## Publish
 
-3. `os.start_run({ trigger: schedule })`.
+3. `os.start_run({ trigger })` — use `due.trigger` when OS sends `immediate` / `manual`; otherwise `schedule`.
 4. Post with Meta Graph (page token). Never call Meta from Liba OS.
    - Facebook page feed: photo URL or feed message.
    - Facebook story: unpublished photo → photo_stories (skip if it fails; still keep feed).

@@ -39,7 +39,7 @@ def main() -> int:
     client = get_os_client(
         os_cfg.get("mode") or "mock",
         data_dir=os_cfg.get("_mock_dir"),
-        base_url=os_cfg.get("base_url") or os.environ.get("LIBA_OS_BASE_URL"),
+        base_url=os.environ.get("LIBA_OS_BASE_URL") or os_cfg.get("base_url"),
         api_key=os.environ.get("LIBA_OS_API_KEY"),
         agent_slug=slug,
     )

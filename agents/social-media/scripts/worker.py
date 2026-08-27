@@ -43,7 +43,8 @@ def main() -> int:
     client = get_os_client(
         os_cfg.get("mode") or "mock",
         data_dir=os_cfg.get("_mock_dir"),
-        base_url=os_cfg.get("base_url") or env_value("LIBA_OS_BASE_URL"),
+        # Env wins in production (xCloud). config base_url is local-dev fallback only.
+        base_url=env_value("LIBA_OS_BASE_URL") or os_cfg.get("base_url"),
         api_key=env_value("LIBA_OS_API_KEY"),
         agent_slug=slug,
     )
@@ -140,9 +141,16 @@ def drain_queue(client, *, limit: int) -> tuple[int, int]:
             break
         if not due.get("has_work"):
             break
+        trigger = str(due.get("trigger") or "schedule").strip() or "schedule"
+        if trigger not in {"schedule", "immediate", "manual"}:
+            trigger = "schedule"
         started = client.start_run(
-            "schedule",
-            metadata={"post_id": (due.get("post") or {}).get("id"), "queue_id": due.get("queue_id")},
+            trigger,
+            metadata={
+                "post_id": (due.get("post") or {}).get("id"),
+                "queue_id": due.get("queue_id"),
+                "trigger": trigger,
+            },
         )
         run_id = str(started["run_id"])
         result = publish_claimed(client, due, run_id=run_id)
