@@ -40,12 +40,23 @@ def main() -> int:
     cfg = load_social_config()
     os_cfg = cfg["os"]
     slug = cfg["agent"].get("os_slug") or "social-media"
+    # Env wins in production (xCloud). config base_url is local-dev fallback only.
+    base_url = (env_value("LIBA_OS_BASE_URL") or os_cfg.get("base_url") or "").rstrip("/")
+    api_key = env_value("LIBA_OS_API_KEY")
+    print(
+        f"os_client mode={os_cfg.get('mode') or 'mock'} slug={slug} "
+        f"base_url={base_url or '(empty)'} api_key_set={bool(api_key)}"
+    )
+    if not base_url or "localhost" in base_url or "127.0.0.1" in base_url:
+        print(
+            "WARNING: OS base_url looks local/empty — set LIBA_OS_BASE_URL to the public Liba OS host",
+            file=sys.stderr,
+        )
     client = get_os_client(
         os_cfg.get("mode") or "mock",
         data_dir=os_cfg.get("_mock_dir"),
-        # Env wins in production (xCloud). config base_url is local-dev fallback only.
-        base_url=env_value("LIBA_OS_BASE_URL") or os_cfg.get("base_url"),
-        api_key=env_value("LIBA_OS_API_KEY"),
+        base_url=base_url or None,
+        api_key=api_key,
         agent_slug=slug,
     )
     report_tools(client)

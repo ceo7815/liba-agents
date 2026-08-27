@@ -12,7 +12,8 @@ os:
   # mock = JSON files. http = POST LIBA_OS_BASE_URL/api/mcp (Bearer LIBA_OS_API_KEY)
   mode: http
   mock_dir: ../../mock_os_data
-  base_url: http://localhost:3000
+  # Leave empty in git — production must set LIBA_OS_BASE_URL in the container env.
+  base_url: ""
 
 meta:
   # Tokens in Hermes profile .env — never in git.
