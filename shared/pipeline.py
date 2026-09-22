@@ -144,8 +144,9 @@ def process_recording(
     """Return skipped | ok | failed."""
     from shared.secrets import env_value
 
+    voicenter_on = (env_value("CALL_QA_VOICENTER_ENABLED") or os.environ.get("CALL_QA_VOICENTER_ENABLED") or "1").strip()
     analyze = (env_value("CALL_QA_ANALYZE_ENABLED") or os.environ.get("CALL_QA_ANALYZE_ENABLED") or "1").strip()
-    if analyze.lower() not in {"1", "true", "yes"}:
+    if voicenter_on.lower() not in {"1", "true", "yes"} and analyze.lower() not in {"1", "true", "yes"}:
         log("analyze_disabled", external_id=recording.remote_id or recording.name)
         return "skipped"
     external_id = recording.remote_id or recording.name or str(recording.path)

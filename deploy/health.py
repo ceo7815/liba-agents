@@ -167,6 +167,8 @@ def build_status() -> dict:
         "voicenter_inbox_pending": inbox_count,
         "voicenter_last_pull": _voicenter_last_pull(),
         "call_qa_voicenter_enabled": os.environ.get("CALL_QA_VOICENTER_ENABLED", "0"),
+        "call_qa_analyze_enabled": os.environ.get("CALL_QA_ANALYZE_ENABLED", "0"),
+        "call_qa_worker": "watch-v2",
         "heartbeat_probe": probe,
     }
 

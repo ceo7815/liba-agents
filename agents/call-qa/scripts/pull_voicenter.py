@@ -24,9 +24,16 @@ from shared.secrets import env_value
 from shared.voicenter import list_pending_inbox, load_inbox_file, mark_processed, sofia_agent_name
 
 
-def analyze_enabled() -> bool:
-    raw = (env_value("CALL_QA_ANALYZE_ENABLED") or os.environ.get("CALL_QA_ANALYZE_ENABLED") or "1").strip()
+def _flag(name: str, default: str = "1") -> bool:
+    raw = (env_value(name) or os.environ.get(name) or default).strip()
     return raw.lower() in {"1", "true", "yes"}
+
+
+def analyze_enabled() -> bool:
+    # Sofia + Voicenter always scores. The old ANALYZE=0 env must not block it.
+    if _flag("CALL_QA_VOICENTER_ENABLED", "1"):
+        return True
+    return _flag("CALL_QA_ANALYZE_ENABLED", "1")
 
 
 def _os_client():
@@ -45,7 +52,7 @@ def _os_client():
 def drain_os_pending(client, stt, language: str, *, force: bool = False, run_id: str | None = None) -> tuple[int, int, int]:
     """Analyze Sofia calls already sitting as pending in Liba OS."""
     try:
-        pending = client.get_pending(limit=40)
+        pending = client.get_pending(limit=8)
         calls = list(pending.get("calls") or [])
     except Exception as exc:
         print(f"get_pending failed: {exc}")
@@ -121,8 +128,12 @@ def process_inbox_once(*, force: bool = False) -> int:
     pending_files = list_pending_inbox()
     recordings = {r.remote_id: r for r in source.list_new()} if pending_files else {}
 
-    run = client.start_run(trigger="voicenter_push")
-    run_id = str(run.get("run_id") or run.get("id") or "voicenter")
+    try:
+        run = client.start_run(trigger="voicenter_push")
+        run_id = str(run.get("run_id") or run.get("id") or "voicenter")
+    except Exception as exc:
+        print(f"start_run failed: {exc}")
+        run_id = "voicenter"
     print(f"voicenter inbox: {len(pending_files)} files, {len(recordings)} accepted for {sofia_agent_name()}")
 
     ok = skipped = failed = 0
@@ -204,12 +215,12 @@ def main() -> int:
             agent_slug=slug,
         )
         report_call_qa_tools(client)
-        print(f"Watching Voicenter inbox every {args.interval}s; heartbeat every 60s")
+        print(f"Watching Voicenter inbox every {args.interval}s; analyze={analyze_enabled()}")
         last_beat = 0.0
         try:
             while True:
                 now = time.time()
-                if now - last_beat >= 60:
+                if now - last_beat >= 20:
                     try:
                         client.heartbeat("online")
                         report_call_qa_tools(client)
@@ -217,7 +228,10 @@ def main() -> int:
                     except OsError as exc:
                         print(f"heartbeat failed: {exc}")
                     last_beat = now
-                process_inbox_once(force=args.force)
+                try:
+                    process_inbox_once(force=args.force)
+                except Exception as exc:  # noqa: BLE001
+                    print(f"watch cycle failed: {exc}")
                 time.sleep(max(3, args.interval))
         except KeyboardInterrupt:
             print("Stopped.")

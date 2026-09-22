@@ -14,9 +14,15 @@ if [ "${CALL_QA_VOICENTER_ENABLED:-0}" = "1" ]; then
 fi
 echo "liba-agents start: CALL_QA_VOICENTER_ENABLED=${CALL_QA_VOICENTER_ENABLED:-0} CALL_QA_ANALYZE_ENABLED=${CALL_QA_ANALYZE_ENABLED:-0} VOICENTER_API_CODE_set=$([ -n "${VOICENTER_API_CODE:-}" ] && echo yes || echo no)"
 
-# Voicenter → call-qa (Sofia). Report chips + watch first; history must not block them.
+# Voicenter → call-qa (Sofia). Heartbeat + watch first. History must not block scoring.
 if [ "${CALL_QA_VOICENTER_ENABLED:-0}" = "1" ]; then
   python /app/agents/call-qa/scripts/report_status.py || true
+  (
+    while true; do
+      python /app/agents/call-qa/scripts/report_status.py || true
+      sleep 25
+    done
+  ) &
   (
     while true; do
       python /app/agents/call-qa/scripts/pull_voicenter.py --watch --interval 15 || true
@@ -25,10 +31,8 @@ if [ "${CALL_QA_VOICENTER_ENABLED:-0}" = "1" ]; then
     done
   ) &
   (
-    python /app/agents/call-qa/scripts/pull_voicenter_history.py --days 90 --chunk 1 || true
-    if [ "${CALL_QA_ANALYZE_ENABLED:-0}" = "1" ]; then
-      python /app/agents/call-qa/scripts/pull_voicenter.py --once || true
-    fi
+    sleep 45
+    python /app/agents/call-qa/scripts/pull_voicenter_history.py --days 3 --chunk 1 || true
     python /app/agents/call-qa/scripts/report_status.py || true
   ) &
   (
