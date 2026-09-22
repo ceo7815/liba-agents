@@ -361,8 +361,10 @@ def process_recording(
         return "ok"
     except Exception as exc:
         log("failed", call_id=call_id, external_id=external_id, error=str(exc))
+        retryable = "429" in str(exc) or "too many requests" in str(exc).lower()
+        next_status = "pending" if retryable else "failed"
         try:
-            os_client.set_call_status(call_id, "failed")
+            os_client.set_call_status(call_id, next_status)
             os_client.register_call(
                 external_id=external_id,
                 source=recording.source,
@@ -371,7 +373,8 @@ def process_recording(
                 audio_path=fields["audio_path"],
                 metadata={**fields["metadata"], "last_error": str(exc)[:400]},
             )
-            os_client.log(run_id, "error", f"{external_id}: {exc}")
+            if run_id:
+                os_client.log(run_id, "error", f"{external_id}: {exc}")
         except Exception:
             pass
-        return "failed"
+        return "retry" if retryable else "failed"

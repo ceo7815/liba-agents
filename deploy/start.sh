@@ -25,7 +25,7 @@ if [ "${CALL_QA_VOICENTER_ENABLED:-0}" = "1" ]; then
   ) &
   (
     while true; do
-      python /app/agents/call-qa/scripts/pull_voicenter.py --watch --interval 15 || true
+      python /app/agents/call-qa/scripts/pull_voicenter.py --watch --interval 20 || true
       echo "call-qa voicenter worker exited; restarting in 5s"
       sleep 5
     done

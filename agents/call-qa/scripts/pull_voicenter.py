@@ -52,7 +52,7 @@ def _os_client():
 def drain_os_pending(client, stt, language: str, *, force: bool = False, run_id: str | None = None) -> tuple[int, int, int]:
     """Analyze Sofia calls already sitting as pending in Liba OS."""
     try:
-        pending = client.get_pending(limit=8)
+        pending = client.get_pending(limit=1)
         calls = list(pending.get("calls") or [])
     except Exception as exc:
         print(f"get_pending failed: {exc}")
@@ -101,9 +101,50 @@ def drain_os_pending(client, stt, language: str, *, force: bool = False, run_id:
             ok += 1
         elif result == "skipped":
             skipped += 1
+        elif result == "retry":
+            skipped += 1
+            print("rate limited; waiting 40s before next call")
+            time.sleep(40)
         else:
             failed += 1
     return ok, skipped, failed
+
+
+def _register_inbox(client) -> int:
+    """Park new PUSH files in OS. Analysis happens one-by-one via get_pending."""
+    registered = 0
+    for path in list_pending_inbox():
+        try:
+            call, envelope = load_inbox_file(path)
+        except Exception as exc:
+            print(f"skip bad file {path.name}: {exc}")
+            mark_processed(path)
+            continue
+        if envelope.get("accepted") is False:
+            mark_processed(path)
+            continue
+        url = call.record_url if call.record_url and str(call.record_url).startswith("http") else None
+        try:
+            client.register_call(
+                external_id=call.call_id,
+                source="voicenter",
+                duration_sec=call.duration_sec,
+                call_date=call.call_date,
+                audio_path=url,
+                agent_name=call.agent_name or sofia_agent_name(),
+                metadata={
+                    "agent_name": call.agent_name or sofia_agent_name(),
+                    "voicenter_call_id": call.call_id,
+                    "file_name": f"sofia-{call.call_id}",
+                    "display_name": "לקוח לא זוהה",
+                    "caller_phone": call.caller,
+                },
+            )
+            mark_processed(path)
+            registered += 1
+        except Exception as exc:
+            print(f"register {path.name} failed: {exc}")
+    return registered
 
 
 def process_inbox_once(*, force: bool = False) -> int:
@@ -114,19 +155,11 @@ def process_inbox_once(*, force: bool = False) -> int:
     stt_cfg = cfg["stt"]
     client = _os_client()
     stt = get_stt_provider(stt_cfg.get("provider"))
-    source = get_recording_source("voicenter")
     language = stt_cfg.get("language") or "auto"
 
-    try:
-        stuck = client.requeue_stuck("voicenter")
-        n = int(stuck.get("requeued") or stuck.get("count") or 0)
-        if n:
-            print(f"requeued {n} stuck Voicenter call(s) to pending")
-    except Exception as exc:
-        print(f"requeue_stuck skipped: {exc}")
-
-    pending_files = list_pending_inbox()
-    recordings = {r.remote_id: r for r in source.list_new()} if pending_files else {}
+    queued = _register_inbox(client)
+    if queued:
+        print(f"registered {queued} inbox call(s)")
 
     run_id = ""
     try:
@@ -134,58 +167,14 @@ def process_inbox_once(*, force: bool = False) -> int:
         run_id = str(run.get("run_id") or run.get("id") or "")
     except Exception as exc:
         print(f"start_run skipped: {exc}")
-    print(f"voicenter inbox: {len(pending_files)} files, {len(recordings)} accepted for {sofia_agent_name()}")
 
-    ok = skipped = failed = 0
-    for path in pending_files:
-        try:
-            call, envelope = load_inbox_file(path)
-        except Exception as exc:
-            print(f"skip bad file {path.name}: {exc}")
-            mark_processed(path)
-            failed += 1
-            continue
-        if envelope.get("accepted") is False:
-            print(f"ignore {path.name}: {envelope.get('reason')}")
-            mark_processed(path)
-            skipped += 1
-            continue
-        recording = recordings.get(call.call_id)
-        if recording is None:
-            print(f"ignore {path.name}: not in accepted list")
-            mark_processed(path)
-            skipped += 1
-            continue
-        result = process_recording(
-            client,
-            source,
-            stt,
-            recording,
-            run_id=run_id,
-            language=language,
-            force=force,
-        )
-        print(f"{call.call_id}: {result}")
-        if result == "ok":
-            ok += 1
-            mark_processed(path)
-        elif result == "skipped":
-            skipped += 1
-            mark_processed(path)
-        else:
-            failed += 1
-            # leave in inbox for retry
-
-    pending_ok, pending_skipped, pending_failed = drain_os_pending(
+    ok, skipped, failed = drain_os_pending(
         client,
         stt,
         language,
         force=force,
-        run_id=run_id,
+        run_id=run_id or None,
     )
-    ok += pending_ok
-    skipped += pending_skipped
-    failed += pending_failed
 
     if run_id:
         try:
@@ -193,7 +182,11 @@ def process_inbox_once(*, force: bool = False) -> int:
         except Exception as exc:
             log("finish_run_error", error=str(exc))
     print(f"done ok={ok} skipped={skipped} failed={failed}")
-    return 0 if failed == 0 else 1
+    if failed:
+        return 1
+    if ok == 0 and skipped == 0:
+        return 0
+    return 0
 
 
 def main() -> int:
