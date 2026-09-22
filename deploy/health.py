@@ -46,7 +46,7 @@ def _report_voicenter_chip(probe: dict) -> dict:
     if probe.get("ok"):
         status = "connected"
     elif _env_set("VOICENTER_API_CODE") or _env_set("VOICENTER_EXTENSION"):
-        status = "error"
+        status = "degraded"
     else:
         status = "disconnected"
     result = _os_mcp(

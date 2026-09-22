@@ -23,7 +23,7 @@ def report_call_qa_tools(client) -> None:
     if not voicenter_ok:
         voicenter_status = "disconnected"
     elif pull_error:
-        voicenter_status = "error"
+        voicenter_status = "degraded"
     else:
         voicenter_status = "connected"
     tools = [

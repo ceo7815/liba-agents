@@ -92,7 +92,7 @@ def require_answer() -> bool:
 
 
 def require_recording() -> bool:
-    return _cfg("VOICENTER_REQUIRE_RECORDING", "1") not in {"0", "false", "False", "no"}
+    return _cfg("VOICENTER_REQUIRE_RECORDING", "0") not in {"0", "false", "False", "no"}
 
 
 def topic_filter_enabled() -> bool:
@@ -131,23 +131,26 @@ def _pick(data: dict[str, Any], *keys: str) -> Any:
 def extension_matches(payload: dict[str, Any], extension: str | None = None) -> bool:
     ext = (extension or sofia_extension()).lower()
     user_id = sofia_user_id()
+    agent = sofia_agent_name()
     candidates = [
         _pick(payload, "extenUser", "targetextension", "Targetextension", "callerextension", "Callerextension"),
-        _pick(payload, "Extension", "extension"),
+        _pick(payload, "Extension", "extension", "TargetNumber"),
     ]
     for value in candidates:
-        if _norm(value).lower() == ext:
+        if ext and _norm(value).lower() == ext:
             return True
-    # Some payloads nest under recording / custom fields
     blob = json.dumps(payload, ensure_ascii=False).lower()
-    if ext and ext.lower() in blob:
-        # Prefer explicit fields first; blob match as soft fallback
-        if any(_norm(v).lower() == ext for v in candidates if v is not None):
-            return True
+    if ext and ext in blob:
+        return True
     rep_code = _pick(payload, "representative_code", "RepresentativeCode", "UserId", "userId")
     if user_id and _norm(rep_code) == user_id:
         return True
-    return any(_norm(v).lower() == ext for v in candidates if v is not None)
+    name = _norm(_pick(payload, "RepresentativeName", "UserName", "representative_name"))
+    if agent and agent in name:
+        return True
+    if "סופיה" in name:
+        return True
+    return False
 
 
 def is_answered(payload: dict[str, Any]) -> bool:
@@ -155,7 +158,15 @@ def is_answered(payload: dict[str, Any]) -> bool:
     is_answer = _pick(payload, "isAnswer", "IsAnswer")
     if is_answer in (1, "1", True, "true", "True"):
         return True
-    return status in {"ANSWER", "ANSWERED"}
+    if status in {"ANSWER", "ANSWERED"}:
+        return True
+    duration = _pick(payload, "Duration", "duration", "actualCallDuration")
+    try:
+        if duration is not None and float(duration) > 0:
+            return True
+    except (TypeError, ValueError):
+        pass
+    return False
 
 
 def has_recording(payload: dict[str, Any]) -> bool:
