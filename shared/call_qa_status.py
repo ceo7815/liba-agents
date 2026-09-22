@@ -4,17 +4,31 @@ from __future__ import annotations
 
 from shared.os_client import OsError
 from shared.secrets import env_value
+from shared.voicenter import read_runtime_status
 
 
 def report_call_qa_tools(client) -> None:
     openai_ok = bool(env_value("OPENAI_API_KEY"))
     voicenter_ok = bool(env_value("VOICENTER_API_CODE") or env_value("VOICENTER_EXTENSION"))
+    pull = read_runtime_status()
+    pull_error = str(pull.get("error") or "").strip()
+    if not voicenter_ok:
+        voicenter_status = "disconnected"
+    elif pull_error:
+        voicenter_status = "error"
+    else:
+        voicenter_status = "connected"
     tools = [
         (
             "voicenter",
             "source",
-            "connected" if voicenter_ok else "disconnected",
-            {"extension": env_value("VOICENTER_EXTENSION") or "LvMpqlBj", "agent": "סופיה"},
+            voicenter_status,
+            {
+                "extension": env_value("VOICENTER_EXTENSION") or "LvMpqlBj",
+                "agent": "סופיה",
+                "last_pull_accepted": pull.get("accepted"),
+                "last_pull_error": pull_error or None,
+            },
         ),
         (
             "openai",

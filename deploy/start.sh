@@ -8,16 +8,20 @@ echo "liba-agents start: LIBA_OS_BASE_URL_set=$([ -n "${LIBA_OS_BASE_URL:-}" ] &
 echo "liba-agents start: META_PAGE_ID_set=$([ -n "${META_PAGE_ID:-}" ] && echo yes || echo no) META_TOKEN_set=$([ -n "${META_PAGE_ACCESS_TOKEN:-}" ] && echo yes || echo no)"
 echo "liba-agents start: CALL_QA_VOICENTER_ENABLED=${CALL_QA_VOICENTER_ENABLED:-0} VOICENTER_API_CODE_set=$([ -n "${VOICENTER_API_CODE:-}" ] && echo yes || echo no)"
 
-# Voicenter → call-qa (Sofia history once, then PUSH inbox)
+# Voicenter → call-qa (Sofia). Report chips + watch first; history must not block them.
 if [ "${CALL_QA_VOICENTER_ENABLED:-0}" = "1" ]; then
+  python /app/agents/call-qa/scripts/report_status.py || true
   (
-    python /app/agents/call-qa/scripts/pull_voicenter_history.py --days 365 || true
-    python /app/agents/call-qa/scripts/pull_voicenter.py --once || true
     while true; do
       python /app/agents/call-qa/scripts/pull_voicenter.py --watch --interval 15 || true
       echo "call-qa voicenter worker exited; restarting in 5s"
       sleep 5
     done
+  ) &
+  (
+    python /app/agents/call-qa/scripts/pull_voicenter_history.py --days 90 --chunk 7 || true
+    python /app/agents/call-qa/scripts/pull_voicenter.py --once || true
+    python /app/agents/call-qa/scripts/report_status.py || true
   ) &
 fi
 

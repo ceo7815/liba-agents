@@ -344,10 +344,36 @@ def mark_processed(path: Path) -> Path:
     return dest
 
 
+def status_path() -> Path:
+    return inbox_dir().parent / "voicenter-status.json"
+
+
+def write_runtime_status(payload: dict[str, Any]) -> None:
+    data = dict(payload)
+    data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    path = status_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def read_runtime_status() -> dict[str, Any]:
+    path = status_path()
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 def fetch_cdr_pull(
     *,
     days: int = 7,
     extension: str | None = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    use_extension_filter: bool = True,
 ) -> list[dict[str, Any]]:
     """PULL Call Log. Often blocked unless server IP is allowlisted in Cpanel."""
     code = api_code()
@@ -355,22 +381,27 @@ def fetch_cdr_pull(
         raise RuntimeError("VOICENTER_API_CODE is missing")
     ext = extension or sofia_extension()
     now = datetime.now(timezone.utc)
-    frm = (now - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S")
-    to = now.strftime("%Y-%m-%dT%H:%M:%S")
+    to_dt = end or now
+    from_dt = start or (to_dt - timedelta(days=days))
+    frm = from_dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    to = to_dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    search: dict[str, Any] = {
+        "fromdate": frm,
+        "todate": to,
+        "IdentityCriteria": "Account",
+    }
+    if use_extension_filter and ext:
+        search["extensions"] = [ext]
     body = {
         "code": code,
-        "search": {
-            "fromdate": frm,
-            "todate": to,
-            "extensions": [ext],
-            "IdentityCriteria": "Account",
-        },
+        "search": search,
         "fields": [
             "CallID",
             "Date",
             "Type",
             "CdrType",
             "DialStatus",
+            "IsAnswer",
             "CallerNumber",
             "TargetNumber",
             "Targetextension",
@@ -380,6 +411,7 @@ def fetch_cdr_pull(
             "RecordExpect",
             "Duration",
             "RepresentativeName",
+            "RepresentativeCode",
             "TargetextensionName",
             "CallerextensionName",
             "QueueName",

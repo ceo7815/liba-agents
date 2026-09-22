@@ -54,6 +54,28 @@ def _probe_os_heartbeat() -> dict:
     return {"ok": True, "data": payload.get("data") or {}}
 
 
+def _probe_voicenter() -> dict:
+    try:
+        from shared.voicenter import fetch_cdr_pull, is_answered, should_accept
+
+        rows = fetch_cdr_pull(days=3, use_extension_filter=True)
+        if not rows:
+            rows = fetch_cdr_pull(days=3, use_extension_filter=False)
+        accepted = sum(1 for row in rows if should_accept(row)[0] and is_answered(row))
+        return {"ok": True, "rows": len(rows), "sofia_accepted": accepted}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": str(exc)}
+
+
+def _voicenter_last_pull() -> dict:
+    try:
+        from shared.voicenter import read_runtime_status
+
+        return read_runtime_status()
+    except Exception as exc:  # noqa: BLE001
+        return {"error": str(exc)}
+
+
 def build_status() -> dict:
     base = (os.environ.get("LIBA_OS_BASE_URL") or "").rstrip("/")
     probe = _probe_os_heartbeat()
@@ -80,6 +102,7 @@ def build_status() -> dict:
         "voicenter_extension": os.environ.get("VOICENTER_EXTENSION") or "LvMpqlBj",
         "voicenter_webhook_token_set": _env_set("VOICENTER_WEBHOOK_TOKEN"),
         "voicenter_inbox_pending": inbox_count,
+        "voicenter_last_pull": _voicenter_last_pull(),
         "call_qa_voicenter_enabled": os.environ.get("CALL_QA_VOICENTER_ENABLED", "0"),
         "heartbeat_probe": probe,
     }
@@ -163,12 +186,15 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path or "/")
         path = parsed.path
         if path in {"/status", "/status.json"}:
-            payload = json.dumps(build_status(), ensure_ascii=False, indent=2).encode("utf-8")
+            payload = build_status()
+            if (parse_qs(parsed.query or "").get("probe") or [""])[0] == "1":
+                payload["voicenter_live_probe"] = _probe_voicenter()
+            raw = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("Content-Length", str(len(raw)))
             self.end_headers()
-            self.wfile.write(payload)
+            self.wfile.write(raw)
             return
 
         body = b"liba-agents ok\n"
