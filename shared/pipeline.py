@@ -21,6 +21,13 @@ from shared.stt import STTProvider
 from shared.stt_openai import file_duration_sec, stt_cost_usd
 
 
+def _valid_run_id(run_id: str | None) -> str | None:
+    raw = (run_id or "").strip()
+    if len(raw) == 36 and raw.count("-") == 4:
+        return raw
+    return None
+
+
 def _call_fields(
     recording: Recording,
     duration_sec: float | None = None,
@@ -172,9 +179,14 @@ def process_recording(
         log("failed", external_id=external_id, error="register returned no call id")
         return "failed"
 
+    run_id = _valid_run_id(run_id)
     try:
         os_client.set_call_status(call_id, "processing")
-        os_client.log(run_id, "info", f"processing {recording.name or external_id}")
+        if run_id:
+            try:
+                os_client.log(run_id, "info", f"processing {recording.name or external_id}")
+            except Exception as exc:
+                log("log_skipped", call_id=call_id, error=str(exc))
 
         if recording.source in {"voicenter", "upload"} and recording.remote_id:
             from shared.voicenter import hydrate_recording
@@ -244,13 +256,17 @@ def process_recording(
                 for turn in transcript.turns
             ]
             provider = transcript.provider
-            os_client.report_cost(
-                run_id,
-                "stt",
-                stt_usd,
-                units=(duration or 0) / 60.0,
-                unit_type="minutes",
-            )
+            if run_id:
+                try:
+                    os_client.report_cost(
+                        run_id,
+                        "stt",
+                        stt_usd,
+                        units=(duration or 0) / 60.0,
+                        unit_type="minutes",
+                    )
+                except Exception as exc:
+                    log("cost_skipped", call_id=call_id, error=str(exc))
 
         guessed_customer, guessed_agent = guess_names_from_transcript(text)
         extracted_customer, extracted_agent = extract_people(text)
@@ -320,13 +336,17 @@ def process_recording(
             audio_path=named["audio_path"],
             metadata=named["metadata"],
         )
-        os_client.report_cost(
-            run_id,
-            "llm",
-            llm_usd,
-            units=float(input_tokens + output_tokens),
-            unit_type="tokens",
-        )
+        if run_id:
+            try:
+                os_client.report_cost(
+                    run_id,
+                    "llm",
+                    llm_usd,
+                    units=float(input_tokens + output_tokens),
+                    unit_type="tokens",
+                )
+            except Exception as exc:
+                log("cost_skipped", call_id=call_id, error=str(exc))
         os_client.set_call_status(call_id, "done")
         log(
             "done",

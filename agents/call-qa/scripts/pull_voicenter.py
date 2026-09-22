@@ -128,12 +128,12 @@ def process_inbox_once(*, force: bool = False) -> int:
     pending_files = list_pending_inbox()
     recordings = {r.remote_id: r for r in source.list_new()} if pending_files else {}
 
+    run_id = ""
     try:
         run = client.start_run(trigger="voicenter_push")
-        run_id = str(run.get("run_id") or run.get("id") or "voicenter")
+        run_id = str(run.get("run_id") or run.get("id") or "")
     except Exception as exc:
-        print(f"start_run failed: {exc}")
-        run_id = "voicenter"
+        print(f"start_run skipped: {exc}")
     print(f"voicenter inbox: {len(pending_files)} files, {len(recordings)} accepted for {sofia_agent_name()}")
 
     ok = skipped = failed = 0
@@ -187,10 +187,11 @@ def process_inbox_once(*, force: bool = False) -> int:
     skipped += pending_skipped
     failed += pending_failed
 
-    try:
-        client.finish_run(run_id, status="success" if failed == 0 else "partial")
-    except Exception as exc:
-        log("finish_run_error", error=str(exc))
+    if run_id:
+        try:
+            client.finish_run(run_id, status="success" if failed == 0 else "partial")
+        except Exception as exc:
+            log("finish_run_error", error=str(exc))
     print(f"done ok={ok} skipped={skipped} failed={failed}")
     return 0 if failed == 0 else 1
 
