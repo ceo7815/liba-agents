@@ -4,14 +4,67 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlparse
 from urllib.request import Request, urlopen
 
+_APP_ROOT = Path(__file__).resolve().parents[1]
+if str(_APP_ROOT) not in sys.path:
+    sys.path.insert(0, str(_APP_ROOT))
+
 
 def _env_set(name: str) -> bool:
     return bool(os.environ.get(name, "").strip())
+
+
+def _os_mcp(tool: str, params: dict) -> dict:
+    base = (os.environ.get("LIBA_OS_BASE_URL") or "").rstrip("/")
+    key = (os.environ.get("LIBA_OS_API_KEY") or "").strip()
+    if not base or not key:
+        return {"ok": False, "error": "missing OS url or key"}
+    req = Request(
+        f"{base}/api/mcp",
+        data=json.dumps({"tool": tool, "params": params}).encode("utf-8"),
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+    )
+    try:
+        with urlopen(req, timeout=20) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": str(exc)}
+
+
+def _report_voicenter_chip(probe: dict) -> dict:
+    if probe.get("ok"):
+        status = "connected"
+    elif _env_set("VOICENTER_API_CODE") or _env_set("VOICENTER_EXTENSION"):
+        status = "error"
+    else:
+        status = "disconnected"
+    result = _os_mcp(
+        "os.report_tool_status",
+        {
+            "agent_slug": "call-control",
+            "tool_name": "voicenter",
+            "tool_type": "source",
+            "status": status,
+            "metadata": {
+                "agent": "סופיה",
+                "extension": os.environ.get("VOICENTER_EXTENSION") or "LvMpqlBj",
+                "probe": probe,
+            },
+        },
+    )
+    _os_mcp("os.heartbeat", {"agent_slug": "call-control", "status": "online"})
+    return {"chip": status, "os": result}
 
 
 def _probe_os_heartbeat() -> dict:
@@ -68,6 +121,16 @@ def _probe_voicenter() -> dict:
 
 
 def _voicenter_last_pull() -> dict:
+    for path in (
+        Path("/app/inbox/voicenter-status.json"),
+        _APP_ROOT / "inbox" / "voicenter-status.json",
+    ):
+        if path.exists():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                return data if isinstance(data, dict) else {"error": "invalid_status_file"}
+            except Exception as exc:  # noqa: BLE001
+                return {"error": str(exc)}
     try:
         from shared.voicenter import read_runtime_status
 
@@ -188,7 +251,9 @@ class Handler(BaseHTTPRequestHandler):
         if path in {"/status", "/status.json"}:
             payload = build_status()
             if (parse_qs(parsed.query or "").get("probe") or [""])[0] == "1":
-                payload["voicenter_live_probe"] = _probe_voicenter()
+                probe = _probe_voicenter()
+                payload["voicenter_live_probe"] = probe
+                payload["voicenter_chip"] = _report_voicenter_chip(probe)
             raw = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")

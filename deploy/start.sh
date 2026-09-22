@@ -1,6 +1,8 @@
 #!/bin/sh
 set -eu
 
+export PYTHONPATH=/app
+
 python /app/deploy/health.py &
 
 echo "liba-agents start: SOCIAL_PUBLISH_ENABLED=${SOCIAL_PUBLISH_ENABLED:-0} SOCIAL_DRY_RUN=${SOCIAL_DRY_RUN:-1}"
@@ -22,6 +24,10 @@ if [ "${CALL_QA_VOICENTER_ENABLED:-0}" = "1" ]; then
     python /app/agents/call-qa/scripts/pull_voicenter_history.py --days 90 --chunk 7 || true
     python /app/agents/call-qa/scripts/pull_voicenter.py --once || true
     python /app/agents/call-qa/scripts/report_status.py || true
+  ) &
+  (
+    sleep 8
+    python -c "from urllib.request import urlopen; urlopen('http://127.0.0.1:8080/status?probe=1', timeout=90).read()" || true
   ) &
 fi
 

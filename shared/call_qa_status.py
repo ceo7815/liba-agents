@@ -2,16 +2,24 @@
 
 from __future__ import annotations
 
+import os
+
 from shared.os_client import OsError
 from shared.secrets import env_value
 from shared.voicenter import read_runtime_status
 
 
+def _present(name: str) -> bool:
+    return bool((os.environ.get(name) or env_value(name) or "").strip())
+
+
 def report_call_qa_tools(client) -> None:
-    openai_ok = bool(env_value("OPENAI_API_KEY"))
-    voicenter_ok = bool(env_value("VOICENTER_API_CODE") or env_value("VOICENTER_EXTENSION"))
+    openai_ok = _present("OPENAI_API_KEY")
+    voicenter_ok = _present("VOICENTER_API_CODE") or _present("VOICENTER_EXTENSION")
     pull = read_runtime_status()
     pull_error = str(pull.get("error") or "").strip()
+    if pull_error.startswith("No module named"):
+        pull_error = ""
     if not voicenter_ok:
         voicenter_status = "disconnected"
     elif pull_error:
