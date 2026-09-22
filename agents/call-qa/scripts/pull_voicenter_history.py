@@ -71,8 +71,9 @@ def register_row(client, row: dict) -> None:
             "agent_name": call.agent_name or sofia_agent_name(),
             "voicenter_call_id": call.call_id,
             "file_name": f"sofia-{call.call_id}",
-            "display_name": call.caller or "לקוח לא זוהה",
+            "display_name": "לקוח לא זוהה",
             "customer_name": None,
+            "caller_phone": call.caller,
         },
     )
 

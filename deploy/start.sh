@@ -8,7 +8,11 @@ python /app/deploy/health.py &
 echo "liba-agents start: SOCIAL_PUBLISH_ENABLED=${SOCIAL_PUBLISH_ENABLED:-0} SOCIAL_DRY_RUN=${SOCIAL_DRY_RUN:-1}"
 echo "liba-agents start: LIBA_OS_BASE_URL_set=$([ -n "${LIBA_OS_BASE_URL:-}" ] && echo yes || echo no) LIBA_OS_API_KEY_set=$([ -n "${LIBA_OS_API_KEY:-}" ] && echo yes || echo no)"
 echo "liba-agents start: META_PAGE_ID_set=$([ -n "${META_PAGE_ID:-}" ] && echo yes || echo no) META_TOKEN_set=$([ -n "${META_PAGE_ACCESS_TOKEN:-}" ] && echo yes || echo no)"
-echo "liba-agents start: CALL_QA_VOICENTER_ENABLED=${CALL_QA_VOICENTER_ENABLED:-0} VOICENTER_API_CODE_set=$([ -n "${VOICENTER_API_CODE:-}" ] && echo yes || echo no)"
+# Voicenter connected means Sofia calls must be scored. Old host .env still has ANALYZE=0.
+if [ "${CALL_QA_VOICENTER_ENABLED:-0}" = "1" ]; then
+  export CALL_QA_ANALYZE_ENABLED=1
+fi
+echo "liba-agents start: CALL_QA_VOICENTER_ENABLED=${CALL_QA_VOICENTER_ENABLED:-0} CALL_QA_ANALYZE_ENABLED=${CALL_QA_ANALYZE_ENABLED:-0} VOICENTER_API_CODE_set=$([ -n "${VOICENTER_API_CODE:-}" ] && echo yes || echo no)"
 
 # Voicenter → call-qa (Sofia). Report chips + watch first; history must not block them.
 if [ "${CALL_QA_VOICENTER_ENABLED:-0}" = "1" ]; then
