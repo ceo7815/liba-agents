@@ -130,6 +130,7 @@ class OsClient(ABC):
         call_date: str | None = None,
         audio_path: str | None = None,
         metadata: dict[str, Any] | None = None,
+        agent_name: str | None = None,
     ) -> dict[str, Any]:
         params: dict[str, Any] = {"external_id": external_id, "source": source}
         for key, value in {
@@ -137,6 +138,7 @@ class OsClient(ABC):
             "call_date": call_date,
             "audio_path": audio_path,
             "metadata": metadata,
+            "agent_name": agent_name,
         }.items():
             if value is not None:
                 params[key] = value

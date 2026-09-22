@@ -9,13 +9,21 @@ model:
   provider: openai-api
 
 source:
-  # local = inbox/  |  drive = shared folder  |  voice_center = later
-  type: drive
+  # voicenter = PUSH CDR inbox (Sofia / LvMpqlBj) — preferred for transcripts
+  # upload/os_pending = Liba OS direct uploads via calls.get_pending
+  # drive = shared folder (disabled for now)
+  type: voicenter
   local_dir: ../../inbox
   drive:
     folder_id: 1PQYaDHFbJDqBWnBn0B4cbnVYPOdCo9Fg
     folder_url: https://drive.google.com/drive/folders/1PQYaDHFbJDqBWnBn0B4cbnVYPOdCo9Fg
     cache_dir: ../../inbox/drive-cache
+  upload:
+    cache_dir: ../../inbox/upload-cache
+  voicenter:
+    cache_dir: ../../inbox/voicenter-audio
+    extension: LvMpqlBj
+    agent_name: סופיה
 
 os:
   # mock = JSON files. http = POST LIBA_OS_BASE_URL/api/mcp (Bearer LIBA_OS_API_KEY)

@@ -6,6 +6,20 @@ python /app/deploy/health.py &
 echo "liba-agents start: SOCIAL_PUBLISH_ENABLED=${SOCIAL_PUBLISH_ENABLED:-0} SOCIAL_DRY_RUN=${SOCIAL_DRY_RUN:-1}"
 echo "liba-agents start: LIBA_OS_BASE_URL_set=$([ -n "${LIBA_OS_BASE_URL:-}" ] && echo yes || echo no) LIBA_OS_API_KEY_set=$([ -n "${LIBA_OS_API_KEY:-}" ] && echo yes || echo no)"
 echo "liba-agents start: META_PAGE_ID_set=$([ -n "${META_PAGE_ID:-}" ] && echo yes || echo no) META_TOKEN_set=$([ -n "${META_PAGE_ACCESS_TOKEN:-}" ] && echo yes || echo no)"
+echo "liba-agents start: CALL_QA_VOICENTER_ENABLED=${CALL_QA_VOICENTER_ENABLED:-0} VOICENTER_API_CODE_set=$([ -n "${VOICENTER_API_CODE:-}" ] && echo yes || echo no)"
+
+# Voicenter → call-qa (Sofia history once, then PUSH inbox)
+if [ "${CALL_QA_VOICENTER_ENABLED:-0}" = "1" ]; then
+  (
+    python /app/agents/call-qa/scripts/pull_voicenter_history.py --days 365 || true
+    python /app/agents/call-qa/scripts/pull_voicenter.py --once || true
+    while true; do
+      python /app/agents/call-qa/scripts/pull_voicenter.py --watch --interval 15 || true
+      echo "call-qa voicenter worker exited; restarting in 5s"
+      sleep 5
+    done
+  ) &
+fi
 
 # Keep the publisher alive even if a single crash happens (health.py alone is not enough).
 while true; do

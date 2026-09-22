@@ -27,16 +27,20 @@ def _call_fields(
 ) -> dict:
     if duration_sec is not None:
         duration_sec = int(round(float(duration_sec)))
+    elif recording.duration_sec is not None:
+        duration_sec = int(round(float(recording.duration_sec)))
     customer_name = clean_person_name(customer_name)
-    agent_name = clean_person_name(agent_name)
+    agent_name = clean_person_name(agent_name or recording.agent_name)
     file_name = recording.name
     call_date = parse_call_datetime(file_name) or recording.modified_time
     url = drive_file_url(recording.remote_id) if recording.source == "drive" else None
+    audio_path = recording.audio_url or url or str(recording.path)
     metadata = {
         "file_name": file_name,
         "display_name": display_name(file_name, parse_call_datetime(file_name), customer_name),
-        "drive_file_id": recording.remote_id,
+        "drive_file_id": recording.remote_id if recording.source == "drive" else None,
         "drive_url": url,
+        "upload_url": recording.audio_url if recording.source in {"upload", "voicenter"} else None,
         "user_id": parse_user_id(file_name),
         "duration_label": format_duration(duration_sec),
         "duration_sec": duration_sec,
@@ -44,13 +48,14 @@ def _call_fields(
         "customer_name": customer_name,
         "agent_name": agent_name,
         "rep_name": agent_name,
+        "voicenter_call_id": recording.remote_id if recording.source == "voicenter" else None,
     }
     if recording.size is not None:
         metadata["size_bytes"] = recording.size
     return {
         "duration_sec": duration_sec,
         "call_date": call_date,
-        "audio_path": url or str(recording.path),
+        "audio_path": audio_path,
         "metadata": {k: v for k, v in metadata.items() if v is not None},
     }
 
@@ -160,17 +165,75 @@ def process_recording(
     try:
         os_client.set_call_status(call_id, "processing")
         os_client.log(run_id, "info", f"processing {recording.name or external_id}")
-        path = source.fetch(recording)
-        transcript = stt.transcribe(path, language=language)
-        text = transcript.as_text()
+
+        stt_usd = 0.0
+        duration = recording.duration_sec
+        if recording.transcript_text:
+            from shared.stt import Transcript, TranscriptTurn
+
+            text = recording.transcript_text
+            segs = list(recording.transcript_segments or ())
+            turns = [
+                TranscriptTurn(
+                    speaker=str(s.get("speaker") or "Speaker0"),
+                    text=str(s.get("text") or ""),
+                    start_sec=s.get("start_sec"),
+                    end_sec=s.get("end_sec"),
+                )
+                for s in segs
+                if s.get("text")
+            ]
+            transcript = Transcript(
+                language="he",
+                turns=turns or [TranscriptTurn(speaker="Speaker0", text=text)],
+                provider=recording.transcript_provider or "voicenter-ai",
+                duration_sec=duration,
+            )
+            if not text and turns:
+                text = transcript.as_text()
+            segments = [
+                {
+                    "speaker": turn.speaker,
+                    "text": turn.text,
+                    "start_sec": turn.start_sec,
+                    "end_sec": turn.end_sec,
+                }
+                for turn in transcript.turns
+            ]
+            provider = transcript.provider
+        else:
+            path = source.fetch(recording)
+            if not path.exists() or path.stat().st_size == 0:
+                raise RuntimeError("no Voicenter transcript and no downloadable recording")
+            transcript = stt.transcribe(path, language=language)
+            text = transcript.as_text()
+            duration = transcript.duration_sec or file_duration_sec(path) or duration
+            stt_usd = stt_cost_usd(duration)
+            segments = [
+                {
+                    "speaker": turn.speaker,
+                    "text": turn.text,
+                    "start_sec": turn.start_sec,
+                    "end_sec": turn.end_sec,
+                }
+                for turn in transcript.turns
+            ]
+            provider = transcript.provider
+            os_client.report_cost(
+                run_id,
+                "stt",
+                stt_usd,
+                units=(duration or 0) / 60.0,
+                unit_type="minutes",
+            )
+
         guessed_customer, guessed_agent = guess_names_from_transcript(text)
         extracted_customer, extracted_agent = extract_people(text)
-        duration = transcript.duration_sec or file_duration_sec(path)
         later = _call_fields(
             recording,
             duration,
             customer_name=extracted_customer or guessed_customer,
-            agent_name=extracted_agent or guessed_agent,
+            agent_name=extracted_agent or guessed_agent or recording.agent_name,
         )
         os_client.register_call(
             external_id=external_id,
@@ -180,30 +243,13 @@ def process_recording(
             audio_path=later["audio_path"],
             metadata=later["metadata"],
         )
-        stt_usd = stt_cost_usd(duration)
-        segments = [
-            {
-                "speaker": turn.speaker,
-                "text": turn.text,
-                "start_sec": turn.start_sec,
-                "end_sec": turn.end_sec,
-            }
-            for turn in transcript.turns
-        ]
         os_client.save_transcript(
             call_id,
             text=text,
             segments=segments,
-            provider=transcript.provider,
+            provider=provider,
             cost_usd=stt_usd,
-            language=transcript.language,
-        )
-        os_client.report_cost(
-            run_id,
-            "stt",
-            stt_usd,
-            units=(duration or 0) / 60.0,
-            unit_type="minutes",
+            language=getattr(transcript, "language", None) or "he",
         )
 
         analysis = analyze_transcript(text)
@@ -213,7 +259,12 @@ def process_recording(
         llm_usd = llm_cost_usd(input_tokens, output_tokens)
         from_analysis_c, from_analysis_a = _people_from_analysis(analysis)
         customer_name = extracted_customer or from_analysis_c or guessed_customer
-        agent_name = extracted_agent or from_analysis_a or guessed_agent
+        agent_name = (
+            recording.agent_name
+            or extracted_agent
+            or from_analysis_a
+            or guessed_agent
+        )
         customer_name = clean_person_name(customer_name)
         agent_name = clean_person_name(agent_name)
         _inject_people(analysis, customer_name, agent_name)

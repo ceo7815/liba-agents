@@ -1,4 +1,7 @@
-"""Drive worker: poll OS (or --once), skip already-done Drive files, transcribe + score."""
+"""call-qa worker: poll Liba OS for uploaded recordings, transcribe + score.
+
+Drive ingest is disabled for now — only OS direct uploads via calls.get_pending.
+"""
 
 from __future__ import annotations
 
@@ -21,18 +24,17 @@ from shared.stt import get_stt_provider
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="call-qa Drive worker")
-    parser.add_argument("--once", action="store_true", help="Process Drive now; do not wait for OS button")
+    parser = argparse.ArgumentParser(description="call-qa upload worker")
+    parser.add_argument("--once", action="store_true", help="Claim pending OS uploads once and process")
     parser.add_argument("--watch", action="store_true", help="Poll os.poll_work until interrupted")
     parser.add_argument("--mock-queue", action="store_true", help="Simulate OS button in mock mode, then process once")
-    parser.add_argument("--interval", type=int, default=15, help="Seconds between polls in --watch")
+    parser.add_argument("--interval", type=int, default=10, help="Seconds between polls in --watch")
     parser.add_argument("--force", action="store_true", help="Re-analyze even if OS already marked the call done")
-    parser.add_argument("--only", help="Process only recordings whose Drive id or file name contains this")
+    parser.add_argument("--only", help="Process only recordings whose id or file name contains this")
     args = parser.parse_args()
 
     cfg = load_call_qa_config()
     os_cfg = cfg["os"]
-    source_cfg = cfg["source"]
     stt_cfg = cfg["stt"]
     slug = cfg["agent"].get("os_slug") or "call-control"
 
@@ -43,14 +45,8 @@ def main() -> int:
         api_key=os.environ.get("LIBA_OS_API_KEY"),
         agent_slug=slug,
     )
-    source = get_recording_source(
-        source_cfg.get("type") or "drive",
-        local_dir=source_cfg.get("_local_dir"),
-        drive_folder_id=(source_cfg.get("drive") or {}).get("folder_id"),
-        cache_dir=source_cfg.get("_cache_dir"),
-    )
     stt = get_stt_provider(stt_cfg.get("provider"))
-    report_agent_tools(client, source_cfg)
+    report_agent_tools(client)
 
     if args.mock_queue:
         if not isinstance(client, MockOsClient):
@@ -58,38 +54,43 @@ def main() -> int:
             return 2
         queued = client.queue_work()
         print(f"Mock queued run {queued}")
-        return run_batch(client, source, stt, run_id=queued, language=stt_cfg.get("language") or "auto", force=args.force, only=args.only)
+        return run_upload_batch(
+            client,
+            stt,
+            run_id=queued,
+            language=stt_cfg.get("language") or "auto",
+            force=args.force,
+            only=args.only,
+        )
 
     if args.watch:
-        print(f"Watching OS poll_work every {args.interval}s (Ctrl+C to stop)")
+        print(f"Watching OS poll_work every {args.interval}s for uploads (Ctrl+C to stop)")
         try:
-            return watch_loop(client, source, stt, args.interval, stt_cfg.get("language") or "auto", force=args.force)
+            return watch_loop(client, stt, args.interval, stt_cfg.get("language") or "auto", force=args.force)
         except KeyboardInterrupt:
             print("Stopped.")
             return 0
 
     if not args.once and not args.watch and not args.mock_queue:
-        print("Use --once (process Drive now) or --watch (wait for OS button).", file=sys.stderr)
+        print("Use --once (process pending uploads) or --watch (wait for OS button).", file=sys.stderr)
         return 2
 
-    return run_batch(client, source, stt, run_id=None, language=stt_cfg.get("language") or "auto", force=args.force, only=args.only)
+    return run_upload_batch(
+        client,
+        stt,
+        run_id=None,
+        language=stt_cfg.get("language") or "auto",
+        force=args.force,
+        only=args.only,
+    )
 
 
-def report_agent_tools(client, source_cfg: dict) -> None:
-    """Fill Liba OS Connections tab. OS itself has no Drive/OpenAI login."""
-    from shared.drive_hermes import is_authenticated
+def report_agent_tools(client) -> None:
     from shared.secrets import env_value
 
-    drive_ok = is_authenticated()
     openai_ok = bool(env_value("OPENAI_API_KEY"))
-    folder_id = (source_cfg.get("drive") or {}).get("folder_id")
     tools = [
-        (
-            "google-drive",
-            "source",
-            "connected" if drive_ok else "disconnected",
-            {"folder_id": folder_id} if folder_id else None,
-        ),
+        ("os-upload", "source", "connected", {"mode": "pending_calls"}),
         (
             "openai-stt",
             "stt",
@@ -111,7 +112,7 @@ def report_agent_tools(client, source_cfg: dict) -> None:
             print(f"tool {name}: report failed: {exc}")
 
 
-def watch_loop(client, source, stt, interval: int, language: str, force: bool = False) -> int:
+def watch_loop(client, stt, interval: int, language: str, force: bool = False) -> int:
     try:
         client.heartbeat("online")
     except Exception as exc:
@@ -119,32 +120,69 @@ def watch_loop(client, source, stt, interval: int, language: str, force: bool = 
         print(f"heartbeat failed: {exc}")
     try:
         while True:
+            run_id = None
             try:
                 work = client.poll_work()
-            except OsError as exc:
-                log("poll_error", error=str(exc))
-                print(f"poll_work failed: {exc}")
-                time.sleep(interval)
-                continue
             except Exception as exc:
                 log("poll_error", error=str(exc))
                 print(f"poll_work failed: {exc}")
-                time.sleep(interval)
-                continue
+                work = {"has_work": False}
+
             if work.get("has_work"):
-                run_batch(
+                meta = work.get("metadata") if isinstance(work.get("metadata"), dict) else {}
+                ingest = str(meta.get("ingest") or meta.get("source") or "pending_calls")
+                run_id = work.get("run_id")
+                if ingest in {"drive"}:
+                    print(f"Skipping Drive job {run_id} — upload-only mode")
+                    try:
+                        client.start_run("manual", metadata={"source": "upload"}, run_id=run_id)
+                        client.finish_run(
+                            str(run_id),
+                            "cancelled",
+                            items_processed=0,
+                            items_failed=0,
+                            error_message="Drive ingest disabled; use OS upload",
+                        )
+                    except Exception as exc:
+                        print(f"cancel drive job failed: {exc}")
+                    run_id = None
+
+            # Always drain pending uploads so analysis starts immediately.
+            try:
+                pending = client.get_pending(limit=20)
+                calls = list(pending.get("calls") or [])
+            except Exception as exc:
+                log("pending_drain_error", error=str(exc))
+                print(f"get_pending failed: {exc}")
+                calls = []
+
+            if calls:
+                print(f"Processing {len(calls)} pending upload(s)")
+                run_upload_batch(
                     client,
-                    source,
                     stt,
-                    run_id=work.get("run_id"),
+                    run_id=run_id,
                     language=language,
                     force=force,
+                    pending_calls=calls,
                 )
+            elif run_id:
+                # Upload job with no pending files left.
+                try:
+                    client.start_run(
+                        "manual",
+                        metadata={"source": "upload", "ingest": "pending_calls"},
+                        run_id=run_id,
+                    )
+                    client.finish_run(str(run_id), "success", items_processed=0, items_failed=0)
+                except Exception as exc:
+                    print(f"finish empty job failed: {exc}")
             else:
                 try:
                     client.heartbeat("online")
                 except Exception:
                     pass
+
             time.sleep(interval)
     finally:
         try:
@@ -153,12 +191,39 @@ def watch_loop(client, source, stt, interval: int, language: str, force: bool = 
             pass
 
 
-
-def run_batch(client, source, stt, run_id: str | None, language: str, force: bool = False, only: str | None = None) -> int:
-    started = client.start_run("manual", metadata={"source": "drive"}, run_id=run_id)
+def run_upload_batch(
+    client,
+    stt,
+    run_id: str | None,
+    language: str,
+    force: bool = False,
+    only: str | None = None,
+    pending_calls: list[dict] | None = None,
+) -> int:
+    started = client.start_run(
+        "manual",
+        metadata={"source": "upload", "ingest": "pending_calls"},
+        run_id=run_id,
+    )
     run_id = str(started["run_id"])
-    log("run_start", run_id=run_id)
-    processed = failed = skipped = 0
+    log("run_start", run_id=run_id, ingest="pending_calls")
+
+    if pending_calls is None:
+        try:
+            pending = client.get_pending(limit=20)
+            pending_calls = list(pending.get("calls") or [])
+        except Exception as exc:
+            client.log(run_id, "error", f"get_pending failed: {exc}")
+            client.finish_run(run_id, "failed", items_processed=0, items_failed=1, error_message=str(exc))
+            print(f"get_pending failed: {exc}")
+            return 1
+
+    source = get_recording_source(
+        "os_pending",
+        os_client=client,
+        pending_calls=pending_calls,
+        cache_dir=ROOT / "inbox" / "upload-cache",
+    )
     recordings = source.list_new()
     if only:
         needle = only.lower()
@@ -168,13 +233,15 @@ def run_batch(client, source, stt, run_id: str | None, language: str, force: boo
             if needle in (rec.remote_id or "").lower() or needle in (rec.name or "").lower()
         ]
         print(f"Filtered to {len(recordings)} file(s) matching {only!r}")
-    print(f"Audio files found: {len(recordings)}")
+
+    print(f"Pending uploads: {len(recordings)}")
     if not recordings:
-        client.log(run_id, "info", "Drive folder has no audio files")
+        client.log(run_id, "info", "No pending OS uploads")
         client.finish_run(run_id, "success", items_processed=0, items_failed=0)
-        print("Nothing to process. Upload audio to the Drive folder, then run again.")
+        print("Nothing to process. Upload a recording in Liba OS, then run again.")
         return 0
 
+    processed = failed = skipped = 0
     for rec in recordings:
         result = process_recording(client, source, stt, rec, run_id, language=language, force=force)
         if result == "ok":

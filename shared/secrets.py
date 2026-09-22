@@ -18,22 +18,25 @@ def _parse_env_file(path: Path) -> dict[str, str]:
     out: dict[str, str] = {}
     if not path.is_file():
         return out
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line in path.read_text(encoding="utf-8-sig").splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)
-        out[key.strip()] = value.strip().strip('"').strip("'")
+        key = key.strip().lstrip("\ufeff").replace("\u200f", "").replace("\u200e", "")
+        out[key] = value.strip().strip('"').strip("'")
     return out
 
 
 def env_value(name: str) -> str:
     if os.environ.get(name):
         return os.environ[name]
+    root = Path(__file__).resolve().parents[1]
     home = hermes_home()
     for path in (
-        home / "profiles" / "social-media" / ".env",
+        root / ".env",
         home / "profiles" / "call-qa" / ".env",
+        home / "profiles" / "social-media" / ".env",
         home / ".env",
     ):
         value = _parse_env_file(path).get(name, "")
