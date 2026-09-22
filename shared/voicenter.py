@@ -367,59 +367,29 @@ def read_runtime_status() -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def fetch_cdr_pull(
-    *,
-    days: int = 7,
-    extension: str | None = None,
-    start: datetime | None = None,
-    end: datetime | None = None,
-    use_extension_filter: bool = True,
-) -> list[dict[str, Any]]:
-    """PULL Call Log. Often blocked unless server IP is allowlisted in Cpanel."""
-    code = api_code()
-    if not code:
-        raise RuntimeError("VOICENTER_API_CODE is missing")
-    ext = extension or sofia_extension()
-    now = datetime.now(timezone.utc)
-    to_dt = end or now
-    from_dt = start or (to_dt - timedelta(days=days))
-    frm = from_dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
-    to = to_dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
-    search: dict[str, Any] = {
-        "fromdate": frm,
-        "todate": to,
-        "IdentityCriteria": "Account",
-    }
-    if use_extension_filter and ext:
-        search["extensions"] = [ext]
-    body = {
-        "code": code,
-        "search": search,
-        "fields": [
-            "CallID",
-            "Date",
-            "Type",
-            "CdrType",
-            "DialStatus",
-            "IsAnswer",
-            "CallerNumber",
-            "TargetNumber",
-            "Targetextension",
-            "Callerextension",
-            "DID",
-            "RecordURL",
-            "RecordExpect",
-            "Duration",
-            "RepresentativeName",
-            "RepresentativeCode",
-            "TargetextensionName",
-            "CallerextensionName",
-            "QueueName",
-            "DepartmentName",
-            "CustomData",
-        ],
-        "sort": [{"Date": "desc"}],
-    }
+_CDR_FIELDS = [
+    "CallID",
+    "Date",
+    "Type",
+    "CdrType",
+    "DialStatus",
+    "CallerNumber",
+    "TargetNumber",
+    "Targetextension",
+    "Callerextension",
+    "DID",
+    "RecordURL",
+    "RecordExpect",
+    "Duration",
+    "RepresentativeName",
+    "RepresentativeCode",
+    "UserName",
+    "UserId",
+    "QueueName",
+]
+
+
+def _post_cdr(body: dict[str, Any]) -> dict[str, Any]:
     req = Request(
         CDR_URL,
         data=json.dumps(body).encode("utf-8"),
@@ -442,6 +412,50 @@ def fetch_cdr_pull(
         raise RuntimeError("unexpected Call Log response")
     if data.get("ERROR_NUMBER") not in (None, 0, "0"):
         raise RuntimeError(f"Call Log error: {data.get('ERROR_DESCRIPTION') or data}")
+    return data
+
+
+def fetch_cdr_pull(
+    *,
+    days: int = 7,
+    extension: str | None = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    use_extension_filter: bool = True,
+) -> list[dict[str, Any]]:
+    """PULL Call Log. Often blocked unless server IP is allowlisted in Cpanel."""
+    code = api_code()
+    if not code:
+        raise RuntimeError("VOICENTER_API_CODE is missing")
+    ext = extension or sofia_extension()
+    now = datetime.now(timezone.utc)
+    to_dt = end or now
+    from_dt = start or (to_dt - timedelta(days=days))
+    frm = from_dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    to = to_dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+
+    attempts: list[dict[str, Any]] = []
+    search_with_ext: dict[str, Any] = {"fromdate": frm, "todate": to}
+    search_plain: dict[str, Any] = {"fromdate": frm, "todate": to}
+    if ext:
+        search_with_ext["extensions"] = [ext]
+    if use_extension_filter and ext:
+        attempts.append({"search": search_with_ext, "fields": _CDR_FIELDS, "sort": [{"field": "Date", "order": "desc"}]})
+    attempts.append({"search": search_plain, "fields": _CDR_FIELDS, "sort": [{"field": "Date", "order": "desc"}]})
+    attempts.append({"search": search_plain})
+
+    last_error: Exception | None = None
+    data: dict[str, Any] | None = None
+    for extra in attempts:
+        try:
+            data = _post_cdr({"code": code, **extra})
+            last_error = None
+            break
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            continue
+    if last_error is not None or data is None:
+        raise last_error or RuntimeError("Voicenter Call Log failed")
     rows = data.get("CDR_LIST") or data.get("calls") or []
     if not isinstance(rows, list):
         return []

@@ -44,7 +44,7 @@ def pull_window(start: datetime, end: datetime) -> list[dict]:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Pull Sofia Voicenter history")
     parser.add_argument("--days", type=int, default=90, help="How far back to pull")
-    parser.add_argument("--chunk", type=int, default=7, help="Days per Call Log request")
+    parser.add_argument("--chunk", type=int, default=1, help="Days per Call Log request")
     args = parser.parse_args()
 
     print(f"history pull: agent={sofia_agent_name()} ext={sofia_extension()} days={args.days}")

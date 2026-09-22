@@ -21,7 +21,7 @@ if [ "${CALL_QA_VOICENTER_ENABLED:-0}" = "1" ]; then
     done
   ) &
   (
-    python /app/agents/call-qa/scripts/pull_voicenter_history.py --days 90 --chunk 7 || true
+    python /app/agents/call-qa/scripts/pull_voicenter_history.py --days 90 --chunk 1 || true
     python /app/agents/call-qa/scripts/pull_voicenter.py --once || true
     python /app/agents/call-qa/scripts/report_status.py || true
   ) &
