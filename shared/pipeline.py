@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 from shared.analyze import analyze_transcript, extract_people, llm_cost_usd
 from shared.logging import log
 from shared.os_client import OsClient
@@ -140,6 +142,12 @@ def process_recording(
     force: bool = False,
 ) -> str:
     """Return skipped | ok | failed."""
+    from shared.secrets import env_value
+
+    analyze = (env_value("CALL_QA_ANALYZE_ENABLED") or os.environ.get("CALL_QA_ANALYZE_ENABLED") or "0").strip()
+    if analyze not in {"1", "true", "True", "yes"}:
+        log("analyze_disabled", external_id=recording.remote_id or recording.name)
+        return "skipped"
     external_id = recording.remote_id or recording.name or str(recording.path)
     fields = _call_fields(recording)
     log("register", external_id=external_id, name=recording.name, display_name=fields["metadata"].get("display_name"))

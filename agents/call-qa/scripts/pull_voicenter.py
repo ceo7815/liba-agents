@@ -24,7 +24,19 @@ from shared.secrets import env_value
 from shared.voicenter import list_pending_inbox, load_inbox_file, mark_processed, sofia_agent_name
 
 
+def analyze_enabled() -> bool:
+    return (env_value("CALL_QA_ANALYZE_ENABLED") or os.environ.get("CALL_QA_ANALYZE_ENABLED") or "0").strip() in {
+        "1",
+        "true",
+        "True",
+        "yes",
+    }
+
+
 def process_inbox_once(*, force: bool = False) -> int:
+    if not analyze_enabled():
+        print("call-qa analyze disabled; leaving inbox and OS calls untouched")
+        return 0
     cfg = load_call_qa_config()
     os_cfg = cfg["os"]
     stt_cfg = cfg["stt"]
