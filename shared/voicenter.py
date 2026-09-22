@@ -397,7 +397,122 @@ _CDR_FIELDS = [
     "UserName",
     "UserId",
     "QueueName",
+    "aiData",
+    "AiData",
 ]
+
+_CALL_CACHE: dict[str, VoicenterCall] = {}
+_CACHE_WINDOWS: set[str] = set()
+
+
+def find_saved_call(call_id: str) -> VoicenterCall | None:
+    if not call_id:
+        return None
+    safe = re.sub(r"[^a-zA-Z0-9._-]+", "_", call_id)[:120]
+    for folder in (inbox_dir(), processed_dir()):
+        for path in (folder / f"{safe}.json", *folder.glob(f"*{safe}*.json")):
+            if not path.is_file():
+                continue
+            try:
+                call, _ = load_inbox_file(path)
+            except Exception:
+                continue
+            if call.call_id == call_id or path.stem.startswith(safe):
+                return call
+    return None
+
+
+def _index_rows(rows: list[dict[str, Any]]) -> None:
+    for row in rows:
+        try:
+            call = parse_cdr(row)
+        except Exception:
+            continue
+        if call.call_id:
+            _CALL_CACHE[call.call_id] = call
+
+
+def _parse_when(raw: str | None) -> datetime | None:
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def refresh_call_by_id(call_id: str, call_date: str | None = None) -> VoicenterCall | None:
+    """Re-pull Call Log so we get a fresh RecordURL / Voicenter transcript."""
+    if call_id in _CALL_CACHE:
+        return _CALL_CACHE[call_id]
+    saved = find_saved_call(call_id)
+    if saved and saved.has_transcript:
+        _CALL_CACHE[call_id] = saved
+        return saved
+
+    center = _parse_when(call_date) or datetime.now(timezone.utc)
+    for span_hours in (12, 48, 24 * 14):
+        key = f"{center.date()}:{span_hours}"
+        if key in _CACHE_WINDOWS:
+            if call_id in _CALL_CACHE:
+                return _CALL_CACHE[call_id]
+            continue
+        start = center - timedelta(hours=span_hours)
+        end = center + timedelta(hours=max(6, span_hours / 4))
+        try:
+            rows = fetch_cdr_pull(start=start, end=end, use_extension_filter=False)
+        except Exception:
+            continue
+        _CACHE_WINDOWS.add(key)
+        _index_rows(rows)
+        if call_id in _CALL_CACHE:
+            return _CALL_CACHE[call_id]
+    return _CALL_CACHE.get(call_id)
+
+
+def apply_call_to_recording(recording, call: VoicenterCall):
+    """Return a Recording copy with fresh URL and Voicenter transcript when present."""
+    from shared.sources import Recording
+
+    text = recording.transcript_text
+    segs = recording.transcript_segments
+    provider = recording.transcript_provider
+    if call.transcript and call.transcript.turns:
+        text = call.transcript.as_text()
+        segs = tuple(
+            {
+                "speaker": t.speaker,
+                "text": t.text,
+                "start_sec": t.start_sec,
+                "end_sec": t.end_sec,
+            }
+            for t in call.transcript.turns
+        )
+        provider = call.transcript.provider
+    return Recording(
+        path=recording.path,
+        source=recording.source,
+        remote_id=recording.remote_id or call.call_id,
+        name=recording.name,
+        modified_time=call.call_date or recording.modified_time,
+        size=recording.size,
+        audio_url=call.record_url or recording.audio_url,
+        agent_name=call.agent_name or recording.agent_name,
+        duration_sec=call.duration_sec or recording.duration_sec,
+        transcript_text=text,
+        transcript_segments=segs,
+        transcript_provider=provider,
+    )
+
+
+def hydrate_recording(recording):
+    call_id = recording.remote_id
+    if not call_id:
+        return recording
+    call = find_saved_call(call_id) or refresh_call_by_id(call_id, recording.modified_time)
+    if not call:
+        return recording
+    return apply_call_to_recording(recording, call)
 
 
 def _post_cdr(body: dict[str, Any]) -> dict[str, Any]:

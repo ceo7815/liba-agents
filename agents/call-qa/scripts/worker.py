@@ -98,10 +98,10 @@ def report_agent_tools(client) -> None:
             {"model": "gpt-4o-transcribe-diarize"},
         ),
         (
-            "openai-gpt-5.4-mini",
+            "openai-gpt-5.6-sol",
             "llm",
             "connected" if openai_ok else "disconnected",
-            {"model": "gpt-5.4-mini"},
+            {"model": "gpt-5.6-sol"},
         ),
     ]
     for name, tool_type, status, metadata in tools:

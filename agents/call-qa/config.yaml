@@ -5,7 +5,7 @@ agent:
   description: Analyze insurance sales/service call recordings and produce QA scores.
 
 model:
-  name: gpt-5.4-mini
+  name: gpt-5.6-sol
   provider: openai-api
 
 source:

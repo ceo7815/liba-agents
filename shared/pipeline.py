@@ -144,8 +144,8 @@ def process_recording(
     """Return skipped | ok | failed."""
     from shared.secrets import env_value
 
-    analyze = (env_value("CALL_QA_ANALYZE_ENABLED") or os.environ.get("CALL_QA_ANALYZE_ENABLED") or "0").strip()
-    if analyze not in {"1", "true", "True", "yes"}:
+    analyze = (env_value("CALL_QA_ANALYZE_ENABLED") or os.environ.get("CALL_QA_ANALYZE_ENABLED") or "1").strip()
+    if analyze.lower() not in {"1", "true", "yes"}:
         log("analyze_disabled", external_id=recording.remote_id or recording.name)
         return "skipped"
     external_id = recording.remote_id or recording.name or str(recording.path)
@@ -173,6 +173,21 @@ def process_recording(
     try:
         os_client.set_call_status(call_id, "processing")
         os_client.log(run_id, "info", f"processing {recording.name or external_id}")
+
+        if recording.source in {"voicenter", "upload"} and recording.remote_id:
+            from shared.voicenter import hydrate_recording
+
+            recording = hydrate_recording(recording)
+            if recording.audio_url or recording.transcript_text:
+                later_url = _call_fields(recording)
+                os_client.register_call(
+                    external_id=external_id,
+                    source=recording.source,
+                    duration_sec=later_url["duration_sec"],
+                    call_date=later_url["call_date"],
+                    audio_path=later_url["audio_path"],
+                    metadata=later_url["metadata"],
+                )
 
         stt_usd = 0.0
         duration = recording.duration_sec
@@ -261,9 +276,12 @@ def process_recording(
         )
 
         analysis = analyze_transcript(text)
+        from shared.incomplete_insurers import apply_incomplete_gate
+
+        apply_incomplete_gate(analysis)
         input_tokens = int(analysis.pop("_input_tokens", 0) or 0)
         output_tokens = int(analysis.pop("_output_tokens", 0) or 0)
-        model = str(analysis.pop("_model", "") or "gpt-5.4-mini")
+        model = str(analysis.pop("_model", "") or "gpt-5.6-sol")
         llm_usd = llm_cost_usd(input_tokens, output_tokens)
         from_analysis_c, from_analysis_a = _people_from_analysis(analysis)
         customer_name = extracted_customer or from_analysis_c or guessed_customer

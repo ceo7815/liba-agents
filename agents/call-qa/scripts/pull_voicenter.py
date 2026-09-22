@@ -25,12 +25,78 @@ from shared.voicenter import list_pending_inbox, load_inbox_file, mark_processed
 
 
 def analyze_enabled() -> bool:
-    return (env_value("CALL_QA_ANALYZE_ENABLED") or os.environ.get("CALL_QA_ANALYZE_ENABLED") or "0").strip() in {
-        "1",
-        "true",
-        "True",
-        "yes",
-    }
+    raw = (env_value("CALL_QA_ANALYZE_ENABLED") or os.environ.get("CALL_QA_ANALYZE_ENABLED") or "1").strip()
+    return raw.lower() in {"1", "true", "yes"}
+
+
+def _os_client():
+    cfg = load_call_qa_config()
+    os_cfg = cfg["os"]
+    slug = cfg["agent"].get("os_slug") or "call-control"
+    return get_os_client(
+        os_cfg.get("mode") or "mock",
+        data_dir=os_cfg.get("_mock_dir"),
+        base_url=env_value("LIBA_OS_BASE_URL") or os_cfg.get("base_url"),
+        api_key=env_value("LIBA_OS_API_KEY"),
+        agent_slug=slug,
+    )
+
+
+def drain_os_pending(client, stt, language: str, *, force: bool = False, run_id: str | None = None) -> tuple[int, int, int]:
+    """Analyze Sofia calls already sitting as pending in Liba OS."""
+    try:
+        pending = client.get_pending(limit=40)
+        calls = list(pending.get("calls") or [])
+    except Exception as exc:
+        print(f"get_pending failed: {exc}")
+        return 0, 0, 1
+    if not calls:
+        return 0, 0, 0
+    source = get_recording_source(
+        "os_pending",
+        os_client=client,
+        pending_calls=calls,
+        cache_dir=ROOT / "inbox" / "upload-cache",
+    )
+    recordings = source.list_new()
+    print(f"os pending: {len(calls)} claimed, {len(recordings)} with audio")
+    ready_ids = {rec.remote_id for rec in recordings}
+    for row in calls:
+        ext = str(row.get("external_id") or row.get("id") or "")
+        if ext in ready_ids:
+            continue
+        call_id = str(row.get("id") or "")
+        if not call_id:
+            continue
+        try:
+            client.set_call_status(call_id, "pending")
+            print(f"pending {ext}: no audio url, returned to queue")
+        except Exception as exc:
+            print(f"pending {ext}: could not return to queue: {exc}")
+    if not recordings:
+        return 0, len(calls), 0
+    if not run_id:
+        run = client.start_run(trigger="os_pending")
+        run_id = str(run.get("run_id") or run.get("id") or "os_pending")
+    ok = skipped = failed = 0
+    for rec in recordings:
+        result = process_recording(
+            client,
+            source,
+            stt,
+            rec,
+            run_id=run_id,
+            language=language,
+            force=force,
+        )
+        print(f"pending {rec.remote_id or rec.name}: {result}")
+        if result == "ok":
+            ok += 1
+        elif result == "skipped":
+            skipped += 1
+        else:
+            failed += 1
+    return ok, skipped, failed
 
 
 def process_inbox_once(*, force: bool = False) -> int:
@@ -38,28 +104,25 @@ def process_inbox_once(*, force: bool = False) -> int:
         print("call-qa analyze disabled; leaving inbox and OS calls untouched")
         return 0
     cfg = load_call_qa_config()
-    os_cfg = cfg["os"]
     stt_cfg = cfg["stt"]
-    slug = cfg["agent"].get("os_slug") or "call-control"
-
-    client = get_os_client(
-        os_cfg.get("mode") or "mock",
-        data_dir=os_cfg.get("_mock_dir"),
-        base_url=env_value("LIBA_OS_BASE_URL") or os_cfg.get("base_url"),
-        api_key=env_value("LIBA_OS_API_KEY"),
-        agent_slug=slug,
-    )
+    client = _os_client()
     stt = get_stt_provider(stt_cfg.get("provider"))
     source = get_recording_source("voicenter")
+    language = stt_cfg.get("language") or "auto"
+
+    try:
+        stuck = client.requeue_stuck("voicenter")
+        n = int(stuck.get("requeued") or stuck.get("count") or 0)
+        if n:
+            print(f"requeued {n} stuck Voicenter call(s) to pending")
+    except Exception as exc:
+        print(f"requeue_stuck skipped: {exc}")
 
     pending_files = list_pending_inbox()
-    if not pending_files:
-        return 0
-    recordings = {r.remote_id: r for r in source.list_new()}
+    recordings = {r.remote_id: r for r in source.list_new()} if pending_files else {}
 
     run = client.start_run(trigger="voicenter_push")
     run_id = str(run.get("run_id") or run.get("id") or "voicenter")
-    language = stt_cfg.get("language") or "auto"
     print(f"voicenter inbox: {len(pending_files)} files, {len(recordings)} accepted for {sofia_agent_name()}")
 
     ok = skipped = failed = 0
@@ -102,8 +165,19 @@ def process_inbox_once(*, force: bool = False) -> int:
             failed += 1
             # leave in inbox for retry
 
+    pending_ok, pending_skipped, pending_failed = drain_os_pending(
+        client,
+        stt,
+        language,
+        force=force,
+        run_id=run_id,
+    )
+    ok += pending_ok
+    skipped += pending_skipped
+    failed += pending_failed
+
     try:
-        client.finish_run(run_id, status="done" if failed == 0 else "partial")
+        client.finish_run(run_id, status="success" if failed == 0 else "partial")
     except Exception as exc:
         log("finish_run_error", error=str(exc))
     print(f"done ok={ok} skipped={skipped} failed={failed}")

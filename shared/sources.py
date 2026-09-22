@@ -127,17 +127,19 @@ class OsPendingSource(RecordingSource):
                 or "upload.bin"
             )
             url = row.get("download_url") or row.get("audio_path")
-            if not isinstance(url, str) or not url.startswith("http"):
-                continue
+            url = url if isinstance(url, str) and url.startswith("http") else None
             safe = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in name)[:120]
             dest = self.cache_dir / f"{external_id.replace(':', '_')}_{safe}"
             out.append(
                 Recording(
                     path=dest,
-                    source="upload",
+                    source="voicenter" if str(row.get("source") or "") == "voicenter" else "upload",
                     remote_id=external_id,
                     name=name,
+                    modified_time=row.get("call_date") if isinstance(row.get("call_date"), str) else None,
                     audio_url=url,
+                    agent_name=meta.get("agent_name") if isinstance(meta.get("agent_name"), str) else None,
+                    duration_sec=float(row["duration_sec"]) if row.get("duration_sec") is not None else None,
                 )
             )
         return out

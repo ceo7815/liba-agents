@@ -147,6 +147,9 @@ class OsClient(ABC):
     def get_pending(self, limit: int = 10) -> dict[str, Any]:
         return self.call_tool("calls.get_pending", {"limit": limit})
 
+    def requeue_stuck(self, source: str = "voicenter") -> dict[str, Any]:
+        return self.call_tool("calls.requeue_stuck", {"source": source})
+
     def set_call_status(self, call_id: str, status: str) -> dict[str, Any]:
         return self.call_tool("calls.set_status", {"call_id": call_id, "status": status})
 
@@ -383,6 +386,19 @@ class MockOsClient(OsClient):
         elif tool == "calls.get_pending":
             pending = [row for row in state["calls"].values() if row.get("status") == "pending"]
             data = {"calls": pending, "count": len(pending)}
+        elif tool == "calls.requeue_stuck":
+            source = str(params.get("source") or "voicenter")
+            n = 0
+            for row in state["calls"].values():
+                if row.get("source") == source and row.get("status") in {
+                    "claimed",
+                    "processing",
+                    "failed",
+                }:
+                    row["status"] = "pending"
+                    n += 1
+            self._save_state(state)
+            data = {"count": n, "requeued": n}
         else:
             data = {"accepted": True}
 

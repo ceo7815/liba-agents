@@ -42,7 +42,7 @@ def report_call_qa_tools(client) -> None:
             "openai",
             "llm",
             "connected" if openai_ok else "disconnected",
-            {"model": "gpt-5.4-mini"},
+            {"model": "gpt-5.6-sol"},
         ),
     ]
     for name, tool_type, status, metadata in tools:
