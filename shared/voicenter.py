@@ -441,6 +441,77 @@ def _parse_when(raw: str | None) -> datetime | None:
         return None
 
 
+def fetch_cdr_by_call_id(call_id: str, call_date: str | None = None) -> VoicenterCall | None:
+    """One-call Call Log lookup — more likely to include aiData + a fresh RecordURL."""
+    code = api_code()
+    if not code or not call_id:
+        return None
+    center = _parse_when(call_date) or datetime.now(timezone.utc)
+    start = center - timedelta(days=3)
+    end = center + timedelta(hours=12)
+    frm = start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    to = end.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    try:
+        data = _post_cdr(
+            {
+                "code": code,
+                "search": {"fromdate": frm, "todate": to, "callID": call_id},
+                "fields": _CDR_FIELDS,
+            }
+        )
+    except Exception:
+        return None
+    rows = data.get("CDR_LIST") or data.get("calls") or []
+    if not isinstance(rows, list):
+        return None
+    _index_rows([r for r in rows if isinstance(r, dict)])
+    return _CALL_CACHE.get(call_id)
+
+
+def download_record(url: str, dest: Path) -> Path:
+    """Download a Voicenter PlayRecord URL. Cpanel links 403 unless we send the API code."""
+    code = api_code()
+    candidates = [url]
+    if code and "code=" not in url:
+        sep = "&" if "?" in url else "?"
+        candidates.append(f"{url}{sep}code={code}")
+    header_sets = [
+        {"User-Agent": "liba-call-qa/1.0", "Accept": "*/*"},
+        {
+            "User-Agent": "Mozilla/5.0",
+            "Accept": "*/*",
+            "Referer": "https://cpanel.voicenter.co.il/",
+        },
+    ]
+    if code:
+        header_sets.append(
+            {
+                "User-Agent": "liba-call-qa/1.0",
+                "Accept": "*/*",
+                "Authorization": f"Bearer {code}",
+            }
+        )
+    last: Exception | None = None
+    for candidate in candidates:
+        for headers in header_sets:
+            try:
+                req = Request(candidate, headers={k: v for k, v in headers.items() if v})
+                with urlopen(req, timeout=120) as resp:
+                    payload = resp.read()
+                    ctype = (resp.headers.get("Content-Type") or "").lower()
+                head = payload[:200].lower()
+                if len(payload) < 256 or b"<html" in head or "text/html" in ctype:
+                    last = RuntimeError("PlayRecord returned HTML instead of audio")
+                    continue
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(payload)
+                return dest
+            except Exception as exc:  # noqa: BLE001
+                last = exc
+                continue
+    raise last or RuntimeError(f"could not download recording: {url}")
+
+
 def refresh_call_by_id(call_id: str, call_date: str | None = None) -> VoicenterCall | None:
     """Re-pull Call Log so we get a fresh RecordURL / Voicenter transcript."""
     if call_id in _CALL_CACHE:
@@ -449,6 +520,9 @@ def refresh_call_by_id(call_id: str, call_date: str | None = None) -> VoicenterC
     if saved and saved.has_transcript:
         _CALL_CACHE[call_id] = saved
         return saved
+    found = fetch_cdr_by_call_id(call_id, call_date)
+    if found:
+        return found
 
     center = _parse_when(call_date) or datetime.now(timezone.utc)
     for span_hours in (12, 48, 24 * 14):

@@ -36,7 +36,8 @@ def _call_fields(
     file_name = recording.name
     call_date = parse_call_datetime(file_name) or recording.modified_time
     url = drive_file_url(recording.remote_id) if recording.source == "drive" else None
-    audio_path = recording.audio_url or url or str(recording.path)
+    raw_audio = recording.audio_url or url
+    audio_path = raw_audio if isinstance(raw_audio, str) and raw_audio.startswith("http") else None
     metadata = {
         "file_name": file_name,
         "display_name": display_name(file_name, parse_call_datetime(file_name), customer_name),
@@ -342,6 +343,14 @@ def process_recording(
         log("failed", call_id=call_id, external_id=external_id, error=str(exc))
         try:
             os_client.set_call_status(call_id, "failed")
+            os_client.register_call(
+                external_id=external_id,
+                source=recording.source,
+                duration_sec=fields["duration_sec"],
+                call_date=fields["call_date"],
+                audio_path=fields["audio_path"],
+                metadata={**fields["metadata"], "last_error": str(exc)[:400]},
+            )
             os_client.log(run_id, "error", f"{external_id}: {exc}")
         except Exception:
             pass

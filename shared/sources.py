@@ -149,15 +149,13 @@ class OsPendingSource(RecordingSource):
             return recording.path
         url = recording.audio_url
         if not url:
-            raise FileNotFoundError(f"Upload recording missing URL: {recording.remote_id}")
-        from urllib.request import Request, urlopen
+            recording.path.parent.mkdir(parents=True, exist_ok=True)
+            if not recording.path.exists():
+                recording.path.write_bytes(b"")
+            return recording.path
+        from shared.voicenter import download_record
 
-        req = Request(url, headers={"User-Agent": "liba-call-qa/1.0"})
-        with urlopen(req, timeout=120) as resp:
-            data = resp.read()
-        recording.path.parent.mkdir(parents=True, exist_ok=True)
-        recording.path.write_bytes(data)
-        return recording.path
+        return download_record(url, recording.path)
 
 
 class VoiceCenterSource(RecordingSource):
@@ -224,14 +222,9 @@ class VoiceCenterSource(RecordingSource):
             if not recording.path.exists():
                 recording.path.write_bytes(b"")
             return recording.path
-        from urllib.request import Request, urlopen
+        from shared.voicenter import download_record
 
-        req = Request(url, headers={"User-Agent": "liba-call-qa/1.0"})
-        with urlopen(req, timeout=120) as resp:
-            data = resp.read()
-        recording.path.parent.mkdir(parents=True, exist_ok=True)
-        recording.path.write_bytes(data)
-        return recording.path
+        return download_record(url, recording.path)
 
 
 def get_recording_source(
