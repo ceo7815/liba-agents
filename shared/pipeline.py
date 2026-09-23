@@ -180,6 +180,17 @@ def process_recording(
         log("failed", external_id=external_id, error="register returned no call id")
         return "failed"
 
+    duration_known = recording.duration_sec
+    if duration_known is None:
+        duration_known = fields.get("duration_sec")
+    if duration_known is not None and float(duration_known) <= 5:
+        try:
+            os_client.set_call_status(call_id, "skipped")
+        except Exception as exc:
+            log("skip_short_status", call_id=call_id, error=str(exc))
+        log("skip_short", call_id=call_id, external_id=external_id, duration_sec=duration_known)
+        return "skipped"
+
     run_id = _valid_run_id(run_id)
     try:
         os_client.set_call_status(call_id, "processing")
