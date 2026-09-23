@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime, timedelta, timezone
 
 from shared.analyze import analyze_transcript, extract_people, llm_cost_usd
 from shared.logging import log
@@ -363,6 +364,9 @@ def process_recording(
         log("failed", call_id=call_id, external_id=external_id, error=str(exc))
         retryable = "429" in str(exc) or "too many requests" in str(exc).lower()
         next_status = "pending" if retryable else "failed"
+        meta = {**fields["metadata"], "last_error": str(exc)[:400]}
+        if retryable:
+            meta["retry_after"] = (datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat()
         try:
             os_client.set_call_status(call_id, next_status)
             os_client.register_call(
@@ -371,7 +375,7 @@ def process_recording(
                 duration_sec=fields["duration_sec"],
                 call_date=fields["call_date"],
                 audio_path=fields["audio_path"],
-                metadata={**fields["metadata"], "last_error": str(exc)[:400]},
+                metadata=meta,
             )
             if run_id:
                 os_client.log(run_id, "error", f"{external_id}: {exc}")

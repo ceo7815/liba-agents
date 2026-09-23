@@ -103,8 +103,7 @@ def drain_os_pending(client, stt, language: str, *, force: bool = False, run_id:
             skipped += 1
         elif result == "retry":
             skipped += 1
-            print("rate limited; waiting 40s before next call")
-            time.sleep(40)
+            print("rate limited; call cooled down for 15m, queue moves on")
         else:
             failed += 1
     return ok, skipped, failed
@@ -168,19 +167,26 @@ def process_inbox_once(*, force: bool = False) -> int:
     except Exception as exc:
         print(f"start_run skipped: {exc}")
 
-    ok, skipped, failed = drain_os_pending(
-        client,
-        stt,
-        language,
-        force=force,
-        run_id=run_id or None,
-    )
-
-    if run_id:
-        try:
-            client.finish_run(run_id, status="success" if failed == 0 else "partial")
-        except Exception as exc:
-            log("finish_run_error", error=str(exc))
+    ok = skipped = failed = 0
+    try:
+        ok, skipped, failed = drain_os_pending(
+            client,
+            stt,
+            language,
+            force=force,
+            run_id=run_id or None,
+        )
+    finally:
+        if run_id:
+            try:
+                client.finish_run(
+                    run_id,
+                    "success" if failed == 0 else "partial",
+                    items_processed=ok,
+                    items_failed=failed,
+                )
+            except Exception as exc:
+                log("finish_run_error", error=str(exc))
     print(f"done ok={ok} skipped={skipped} failed={failed}")
     if failed:
         return 1

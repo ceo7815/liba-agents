@@ -402,7 +402,6 @@ _CDR_FIELDS = [
 ]
 
 _CALL_CACHE: dict[str, VoicenterCall] = {}
-_CACHE_WINDOWS: set[str] = set()
 
 
 def find_saved_call(call_id: str) -> VoicenterCall | None:
@@ -469,47 +468,34 @@ def fetch_cdr_by_call_id(call_id: str, call_date: str | None = None) -> Voicente
 
 
 def download_record(url: str, dest: Path) -> Path:
-    """Download a Voicenter PlayRecord URL. Cpanel links 403 unless we send the API code."""
+    """Download one Voicenter PlayRecord URL.
+
+    A single attempt. Repeating the same link with extra headers is what made
+    Voicenter answer 429 and froze the queue on one call.
+    """
     code = api_code()
-    candidates = [url]
+    candidate = url
     if code and "code=" not in url:
         sep = "&" if "?" in url else "?"
-        candidates.append(f"{url}{sep}code={code}")
-    header_sets = [
-        {"User-Agent": "liba-call-qa/1.0", "Accept": "*/*"},
-        {
-            "User-Agent": "Mozilla/5.0",
-            "Accept": "*/*",
-            "Referer": "https://cpanel.voicenter.co.il/",
-        },
-    ]
-    if code:
-        header_sets.append(
-            {
-                "User-Agent": "liba-call-qa/1.0",
-                "Accept": "*/*",
-                "Authorization": f"Bearer {code}",
-            }
-        )
-    last: Exception | None = None
-    for candidate in candidates:
-        for headers in header_sets:
-            try:
-                req = Request(candidate, headers={k: v for k, v in headers.items() if v})
-                with urlopen(req, timeout=120) as resp:
-                    payload = resp.read()
-                    ctype = (resp.headers.get("Content-Type") or "").lower()
-                head = payload[:200].lower()
-                if len(payload) < 256 or b"<html" in head or "text/html" in ctype:
-                    last = RuntimeError("PlayRecord returned HTML instead of audio")
-                    continue
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                dest.write_bytes(payload)
-                return dest
-            except Exception as exc:  # noqa: BLE001
-                last = exc
-                continue
-    raise last or RuntimeError(f"could not download recording: {url}")
+        candidate = f"{url}{sep}code={code}"
+    req = Request(
+        candidate,
+        headers={"User-Agent": "liba-call-qa/1.0", "Accept": "audio/*,*/*"},
+    )
+    try:
+        with urlopen(req, timeout=120) as resp:
+            payload = resp.read()
+            ctype = (resp.headers.get("Content-Type") or "").lower()
+    except HTTPError as exc:
+        if exc.code == 429:
+            raise RuntimeError("HTTP Error 429: Too Many Requests") from exc
+        raise RuntimeError(f"PlayRecord HTTP {exc.code}") from exc
+    head = payload[:200].lower()
+    if len(payload) < 256 or b"<html" in head or "text/html" in ctype:
+        raise RuntimeError("PlayRecord returned HTML instead of audio")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(payload)
+    return dest
 
 
 def refresh_call_by_id(call_id: str, call_date: str | None = None) -> VoicenterCall | None:
@@ -520,28 +506,9 @@ def refresh_call_by_id(call_id: str, call_date: str | None = None) -> VoicenterC
     if saved and saved.has_transcript:
         _CALL_CACHE[call_id] = saved
         return saved
-    found = fetch_cdr_by_call_id(call_id, call_date)
-    if found:
-        return found
-
-    center = _parse_when(call_date) or datetime.now(timezone.utc)
-    for span_hours in (12, 48, 24 * 14):
-        key = f"{center.date()}:{span_hours}"
-        if key in _CACHE_WINDOWS:
-            if call_id in _CALL_CACHE:
-                return _CALL_CACHE[call_id]
-            continue
-        start = center - timedelta(hours=span_hours)
-        end = center + timedelta(hours=max(6, span_hours / 4))
-        try:
-            rows = fetch_cdr_pull(start=start, end=end, use_extension_filter=False)
-        except Exception:
-            continue
-        _CACHE_WINDOWS.add(key)
-        _index_rows(rows)
-        if call_id in _CALL_CACHE:
-            return _CALL_CACHE[call_id]
-    return _CALL_CACHE.get(call_id)
+    # One Call Log lookup. Wide window pulls hit Voicenter's request cap
+    # and were running before every recording download.
+    return fetch_cdr_by_call_id(call_id, call_date)
 
 
 def apply_call_to_recording(recording, call: VoicenterCall):
