@@ -217,6 +217,8 @@ def process_recording(
 
         stt_usd = 0.0
         duration = recording.duration_sec
+        if recording.source == "voicenter" and not recording.transcript_text:
+            raise RuntimeError("waiting for Voicenter transcript")
         if recording.transcript_text:
             from shared.stt import Transcript, TranscriptTurn
 
@@ -373,7 +375,12 @@ def process_recording(
         return "ok"
     except Exception as exc:
         log("failed", call_id=call_id, external_id=external_id, error=str(exc))
-        retryable = "429" in str(exc) or "too many requests" in str(exc).lower()
+        message = str(exc)
+        retryable = (
+            "429" in message
+            or "too many requests" in message.lower()
+            or "waiting for Voicenter transcript" in message
+        )
         next_status = "pending" if retryable else "failed"
         meta = {**fields["metadata"], "last_error": str(exc)[:400]}
         if retryable:

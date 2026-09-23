@@ -109,13 +109,19 @@ def _probe_os_heartbeat() -> dict:
 
 def _probe_voicenter() -> dict:
     try:
-        from shared.voicenter import fetch_cdr_pull, is_answered, should_accept
+        from shared.voicenter import fetch_cdr_pull, is_answered, should_accept, transcript_from_payload
 
         rows = fetch_cdr_pull(days=3, use_extension_filter=True)
         if not rows:
             rows = fetch_cdr_pull(days=3, use_extension_filter=False)
-        accepted = sum(1 for row in rows if should_accept(row)[0] and is_answered(row))
-        return {"ok": True, "rows": len(rows), "sofia_accepted": accepted}
+        accepted = [row for row in rows if should_accept(row)[0] and is_answered(row)]
+        with_transcript = sum(1 for row in accepted if transcript_from_payload(row))
+        return {
+            "ok": True,
+            "rows": len(rows),
+            "sofia_accepted": len(accepted),
+            "sofia_with_transcript": with_transcript,
+        }
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": str(exc)}
 
@@ -168,7 +174,7 @@ def build_status() -> dict:
         "voicenter_last_pull": _voicenter_last_pull(),
         "call_qa_voicenter_enabled": os.environ.get("CALL_QA_VOICENTER_ENABLED", "0"),
         "call_qa_analyze_enabled": os.environ.get("CALL_QA_ANALYZE_ENABLED", "0"),
-        "call_qa_worker": "watch-v5",
+        "call_qa_worker": "watch-v6",
         "heartbeat_probe": probe,
     }
 
